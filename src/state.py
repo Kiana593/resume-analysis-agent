@@ -1,4 +1,4 @@
-﻿"""Agent 状态定义 —— 图节点间传递的数据结构。"""
+"""Agent 状态定义 —— 图节点间传递的数据结构。"""
 
 from typing import TypedDict, Optional, Dict, Any, List
 

@@ -1,4 +1,4 @@
-﻿"""JD 数据接入层。
+"""JD 数据接入层。
 
 - 本地文件模式（load_jds_from_local）：读取 jds/*.json，用于测试与演示。
 - Neo4j 模式（load_jds_from_neo4j）：**由知识图谱模块负责实现**，

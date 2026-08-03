@@ -1,4 +1,4 @@
-﻿"""LLM 提取节点 —— 将简历文本发给 DeepSeek，按六维度模型提取结构化信息。"""
+"""LLM 提取节点 —— 将简历文本发给 DeepSeek，按六维度模型提取结构化信息。"""
 
 from typing import Any, Dict
 

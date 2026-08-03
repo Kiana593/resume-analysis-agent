@@ -1,4 +1,4 @@
-﻿# 简历提取分析 Agent
+# 简历提取分析 Agent
 
 基于 LangGraph 图编排的简历分析工具：**六维提取 → 差距分析 → 学习路径 → 六维加权初筛**。
 
@@ -17,13 +17,20 @@
 # 1. conda 环境（示例：pyw1）
 conda activate pyw1
 
-# 2. 安装依赖
+# 2. 安装依赖（首次需联网；代码以源码方式运行，此命令仅安装依赖、不打包）
 pip install -e .
+
+# 或使用 pip 直接按 pyproject.toml 声明安装（效果相同）
+pip install -e . --no-build-isolation
 
 # 3. 配置 API Key（DeepSeek）
 copy .env.example .env
 # 编辑 .env，填入真实 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL
 ```
+
+> 说明：`pip install -e .` 会读取 `pyproject.toml` 的 `dependencies` 安装全部依赖。
+> 本仓库代码不打包成 Python 包（`[tool.setuptools] packages = []`），统一以
+> `python src/main.py` 从项目根目录运行。
 
 ## 运行方法
 

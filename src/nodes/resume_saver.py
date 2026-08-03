@@ -1,4 +1,4 @@
-﻿"""简历存储节点 —— 提取完成后保存简历 JSON 到 results/。"""
+"""简历存储节点 —— 提取完成后保存简历 JSON 到 results/。"""
 
 import json
 import re

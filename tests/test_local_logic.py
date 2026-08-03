@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import sys, json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent

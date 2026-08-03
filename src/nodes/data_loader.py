@@ -1,4 +1,4 @@
-﻿"""数据加载节点 —— 读取简历 JSON 与 JD JSON 到 state。"""
+"""数据加载节点 —— 读取简历 JSON 与 JD JSON 到 state。"""
 
 import json
 from pathlib import Path

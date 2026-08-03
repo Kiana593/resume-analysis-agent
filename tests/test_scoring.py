@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """六维加权打分模块测试（纯本地，不调用 LLM）。
 
 运行：python tests/test_scoring.py

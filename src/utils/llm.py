@@ -1,4 +1,4 @@
-﻿"""公共 LLM 调用工具 —— 统一 DeepSeek 调用与 JSON 解析。"""
+"""公共 LLM 调用工具 —— 统一 DeepSeek 调用与 JSON 解析。"""
 
 import json
 import os

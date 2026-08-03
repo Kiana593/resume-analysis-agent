@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "resume-extraction-agent"
 version = "0.1.0"
 description = "LangGraph-based agent for extracting structured info from resumes"
@@ -13,6 +13,11 @@ dependencies = [
     "pdfplumber>=0.11",
     "python-dotenv>=1.0",
 ]
+
+# 代码以源码方式运行（python src/main.py），不打包成 Python 包；
+# pip install -e . 仅用于安装 dependencies。
+[tool.setuptools]
+packages = []
 
 [build-system]
 requires = ["setuptools>=75"]

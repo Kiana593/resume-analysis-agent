@@ -1,4 +1,4 @@
-﻿"""文档加载节点 —— 读取 PDF / Word 简历，输出 Markdown 或纯文本。
+"""文档加载节点 —— 读取 PDF / Word 简历，输出 Markdown 或纯文本。
 
 策略：markitdown 主通道（保留文档结构），失败时回退 pdfplumber/docx2txt。
 """
