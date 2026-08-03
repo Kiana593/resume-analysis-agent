@@ -1,13 +1,14 @@
 ﻿# -*- coding: utf-8 -*-
 import sys, json
 from pathlib import Path
-sys.path.insert(0, r"D:\个人资料\26暑假科研项目\小挑\简历提取分析agent")
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 from src.nodes.verify_output import verify_output, _evidence_matches, _flatten_five_dim
 from src.nodes.data_loader import load_jd
 from src.nodes.gap_analysis import _format_five_dim
 from src.nodes.learning_path import _flatten_dimension_inputs
 
-jd = json.load(open(r"D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\jds\01_ic_design.json", encoding="utf-8-sig"))
+jd = json.load(open(ROOT / "jds" / "01_ic_design.json", encoding="utf-8-sig"))
 jd_raw = jd["raw_text"]
 jd_extra = _flatten_five_dim(jd["five_dim"])
 resume_raw = "XX大学 人工智能专业 本科。负责智能客服系统从0到1设计，团队协作良好。学习能力强。"
