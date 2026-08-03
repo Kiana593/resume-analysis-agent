@@ -1,0 +1,17 @@
+﻿# ===== 敏感信息 =====
+.env
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 生成物 =====
+results/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
