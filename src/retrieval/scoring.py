@@ -32,6 +32,17 @@ DIMENSION_KEYS = (
     "self_concept",
 )
 
+# NormalizedSkill.category（图谱技能类别）→ 六维画像 key
+CATEGORY_TO_DIM = {
+    "知识": "knowledge",
+    "技术": "skill",
+    "任职条件": "qualifications",
+    "招聘偏好": "qualifications",
+    "动机": "motivation",
+    "特质": "trait",
+    "自我概念": "self_concept",
+}
+
 # 默认权重：知识/技术/任职条件是硬性门槛（与 LLM 判定规则一致），权重高；
 # 动机/特质/自我概念为软性要求，权重低。可通过 weights 参数覆盖（内部自动归一化）。
 DEFAULT_WEIGHTS: Dict[str, float] = {
@@ -42,6 +53,10 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "trait": 0.10,
     "self_concept": 0.10,
 }
+
+# JD 层少条目惩罚阈值：JD 六维要求条目总数少于该值时，
+# 总分为覆盖率 × (要求条目数 / K)，防止图谱稀疏数据（仅 2-5 条技能）虚高。
+JD_MIN_FEATURES_K = 12
 
 # 条目匹配参数
 _MIN_SUBSTR_LEN = 3          # 归一化后短语子串匹配的最短长度（中文 3 字符 ≈ 1 词）
@@ -136,7 +151,11 @@ def _item_match(candidate_item: str, jd_item: str) -> bool:
     if _degree_satisfied(cand, jd):
         return True
     # 6. 字符重叠率兜底（按较短文本计，容忍浓缩表述）
+    #    仅对中文/混合文本生效；纯英文/数字串需完整子串包含，
+    #    避免 "fpga" 与 "figma" 因共享 f/g/a 字符而误判匹配。
     if len(shorter) >= _MIN_SUBSTR_LEN:
+        if re.fullmatch(r"[a-z0-9]+", shorter):
+            return shorter in longer
         overlap = sum(1 for ch in shorter if ch in longer)
         if overlap / len(shorter) >= _OVERLAP_THRESHOLD:
             return True
@@ -215,7 +234,18 @@ def score_jd(
             "jd_matched": matched,
         }
         total += w[dim] * score
-    return {"total_score": round(total, 4), "dim_scores": dim_scores}
+    # JD 层少条目惩罚：要求条目过少（数据稀疏）时按比例打折，防止覆盖率虚高
+    jd_req_total = sum(d["jd_total"] for d in dim_scores.values())
+    if jd_req_total <= 0:
+        penalty = 1.0
+    else:
+        penalty = min(1.0, jd_req_total / JD_MIN_FEATURES_K)
+    return {
+        "total_score": round(total * penalty, 4),
+        "dim_scores": dim_scores,
+        "jd_penalty": round(penalty, 4),
+        "jd_req_total": jd_req_total,
+    }
 
 
 def rank_jds(

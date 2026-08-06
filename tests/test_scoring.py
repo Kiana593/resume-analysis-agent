@@ -61,14 +61,18 @@ s = score_jd(
     {"qualifications": ["本科/硕士学历", "人工智能/计算机专业"]},
     {"qualifications": ["计算机相关专业", "本科及以上学历"]},
 )
-check("任职条件全覆盖", s["total_score"] == 1.0, str(s))
+# JD 仅 2 条要求，触发少条目惩罚 2/12（total_score 已 round 4 位）
+check("任职条件全覆盖（惩罚后 2/12）", abs(s["total_score"] - round(1.0 * 2 / 12, 4)) < 1e-6, str(s))
 s2 = score_jd(
     {"knowledge": ["大模型知识"], "skill": [], "qualifications": [], "motivation": [], "trait": [], "self_concept": []},
     {"knowledge": ["大模型原理", "分布式训练"], "skill": ["Python"], "qualifications": [], "motivation": [], "trait": [], "self_concept": []},
 )
 # 空维度 JD 视为满足（1.0），其余 4 个空维度贡献 0.2+0.1+0.1+0.1
 expect = DEFAULT_WEIGHTS["knowledge"] * 0.5 + 0.2 + 0.1 + 0.1 + 0.1
-check("权重加权正确", abs(s2["total_score"] - expect) < 1e-6, f"{s2['total_score']} vs {expect}")
+# JD 共 3 条要求（knowledge 2 + skill 1），触发少条目惩罚 3/12（total_score 已 round 4 位）
+expect_pen = round(expect * 3 / 12, 4)
+check("权重加权正确（惩罚后 3/12）", abs(s2["total_score"] - expect_pen) < 1e-6,
+      f"{s2['total_score']} vs {expect_pen}")
 
 print("== 权重校验 ==")
 try:
@@ -84,7 +88,7 @@ except ValueError:
 
 print("== 排序 ==")
 ROOT = Path(__file__).resolve().parent.parent
-resume = json.load(open(ROOT / "results" / "test2_20260803_171335.json", encoding="utf-8-sig"))
+resume = json.load(open(ROOT / "tests" / "fixtures" / "test2_five_dim.json", encoding="utf-8-sig"))
 candidate = resume["five_dim"]
 jds = []
 for p in sorted((ROOT / "jds").glob("*.json")):
