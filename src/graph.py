@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph, END
 from src.state import AgentState
 from src.nodes.document_loader import load_document
 from src.nodes.llm_extractor import llm_extract
+from src.nodes.rule_extractor import rule_extract
 from src.nodes.resume_saver import save_resume
 from src.nodes.data_loader import load_resume, load_jd
 from src.nodes.gap_analysis import gap_analysis
@@ -61,11 +62,22 @@ def _output_result(state: AgentState) -> dict:
 
 # ==================== 图 A: 简历提取 ====================
 
+def _extract_router(state: AgentState) -> str:
+    """load_document 后选择提取路线：llm / rule。"""
+    if state.get("error"):
+        return "error_handler"
+    mode = state.get("extraction_mode", "llm")
+    if mode == "rule":
+        return "rule_extract"
+    return "llm_extract"
+
+
 def _build_extract_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
     graph.add_node("load_document", load_document)
     graph.add_node("llm_extract", llm_extract)
+    graph.add_node("rule_extract", rule_extract)
     graph.add_node("save_resume", save_resume)
     graph.add_node("error_handler", _error_handler)
     graph.add_node("output_result", _output_result)
@@ -74,10 +86,14 @@ def _build_extract_graph() -> StateGraph:
 
     graph.add_conditional_edges(
         "load_document",
-        lambda s: "error_handler" if s.get("error") else "llm_extract",
+        _extract_router,
     )
     graph.add_conditional_edges(
         "llm_extract",
+        lambda s: "error_handler" if s.get("error") else "save_resume",
+    )
+    graph.add_conditional_edges(
+        "rule_extract",
         lambda s: "error_handler" if s.get("error") else "save_resume",
     )
     graph.add_edge("save_resume", "output_result")
@@ -97,6 +113,7 @@ def _analysis_router(state: AgentState) -> str:
     if not verify.get("passed", True) and state.get("retry_count", 0) < 2:
         return "gap_analysis"
     return "output_result"
+
 
 
 def _build_analysis_graph() -> StateGraph:

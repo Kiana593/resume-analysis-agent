@@ -17,6 +17,7 @@ class AgentState(TypedDict, total=False):
     extraction_schema: Dict[str, Any]
     user_requirements: Optional[str]  # 用户指定的重点关注方向
     extraction_result: Optional[Dict[str, Any]]  # 五维提取结果
+    extraction_mode: str  # "llm" | "rule" —— 选择提取路线，默认 "llm"
 
     # ==================== 分析流程 (analysis_flow) ====================
     resume_json: Optional[str]            # 简历 JSON 文件路径（load_resume 使用）

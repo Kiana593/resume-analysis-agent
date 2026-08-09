@@ -22,11 +22,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.graph import extract_graph, analysis_graph
-from src.retrieval.scoring import rank_jds, DIMENSION_KEYS
-from src.retrieval.neo4j_loader import load_jds_from_local, load_jds_from_neo4j
+from src.retrieval.neo4j_loader import load_jds_from_local
 from src.retrieval.graph_match import get_graph_stats
-from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles, load_jds_by_roles
-from src.retrieval.csv_loader import enrich_jds_with_csv
+from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 ANALYSIS_DIR = RESULTS_DIR / "analysis"
@@ -75,8 +73,11 @@ def _stream(graph, initial_state) -> dict:
     return merged
 
 
-def _extract_resume_data(file_path: str, requirements: str | None, schema_path: str | None) -> dict:
+def _extract_resume_data(file_path: str, requirements: str | None, schema_path: str | None, mode: str = "llm") -> dict:
     """运行提取图，返回最终状态（含 resume_data）。
+
+    Args:
+        mode: 提取路线 "llm"（默认）或 "rule"。
 
     Returns:
         {"resume_data": ...} 或 {"error": "..."}
@@ -86,6 +87,7 @@ def _extract_resume_data(file_path: str, requirements: str | None, schema_path: 
         "file_path": str(Path(file_path).resolve()),
         "extraction_schema": schema,
         "user_requirements": requirements,
+        "extraction_mode": mode,
     }
     print(f"\n  正在处理: {initial['file_path']}")
     final = _stream(extract_graph, initial)
@@ -94,18 +96,23 @@ def _extract_resume_data(file_path: str, requirements: str | None, schema_path: 
     return {"resume_data": final.get("resume_data")}
 
 
-def _prepare_resume(resume_src: str, requirements: str | None, schema_path: str | None) -> dict:
-    """根据输入类型准备简历数据：原始文件→先提取；JSON→直接读取。"""
+def _prepare_resume(resume_src: str, requirements: str | None, schema_path: str | None, mode: str = "llm") -> dict:
+    """根据输入类型准备简历数据：原始文件→先提取；JSON→直接读取。
+
+    Args:
+        mode: 提取路线 "llm"（默认）或 "rule"（仅原始文件时生效）。
+    """
     suffix = Path(resume_src).suffix.lower()
     if suffix in RAW_SUFFIXES:
-        return _extract_resume_data(resume_src, requirements, schema_path)
+        return _extract_resume_data(resume_src, requirements, schema_path, mode)
     return {"resume_json": str(Path(resume_src).resolve())}
 
 
 # ==================== 子命令 ====================
 
 def cmd_extract(args) -> int:
-    result = _extract_resume_data(args.file, args.requirements, args.schema)
+    mode = getattr(args, "mode", "llm")
+    result = _extract_resume_data(args.file, args.requirements, args.schema, mode)
     if result.get("error"):
         print(f"\n  [ERROR] {result['error']}\n")
         return 1
@@ -186,12 +193,10 @@ def cmd_batch(args) -> int:
 
 
 def cmd_rank(args) -> int:
-    """六维加权打分初筛（非 LLM）：支持两阶段（Role 粗排 + JD 细排）。
+    """Role 级别宏观职位匹配 —— 简历 vs 134 个标准职业（Neo4j）。
 
-    --source local：本地 jds/ JSON，单阶段 JD 打分（原行为）。
-    --source neo4j：两阶段：
-        阶段 1  Role 粗排（核心技能 + final_score 权重覆盖率）
-        阶段 2  候选 Role 旗下 JD 细排（优先 CSV 完整六维）
+    每个 Role 通过核心技能覆盖率（final_score 加权）计算匹配得分，
+    按得分降序输出最匹配的职业方向。
     """
     resume = _prepare_resume(args.resume, args.requirements, args.schema)
     if resume.get("error"):
@@ -207,105 +212,35 @@ def cmd_rank(args) -> int:
         print("\n  [ERROR] 简历缺少 five_dim 六维数据\n")
         return 1
 
-    weights = None
-    if args.weights:
-        weights = load_json(args.weights)
-
     try:
-        if args.source == "neo4j":
-            return _cmd_rank_neo4j(args, candidate, weights)
-        return _cmd_rank_local(args, candidate, weights)
+        print("\n  [rank] 从 Neo4j 加载 Role 核心技能 ...")
+        roles = load_roles_from_neo4j()
+        ranked_roles = rank_roles(candidate, roles, topk=args.topk)
+        print(f"  [rank] {len(roles)} 个 Role，保留 Top {len(ranked_roles)}")
+
+        _print_role_table(ranked_roles, title="Role 级别职位匹配排名（核心技能覆盖率）")
+
+        out = ANALYSIS_DIR / "rank_result.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(ranked_roles, f, ensure_ascii=False, indent=2)
+        print(f"\n  [rank] Role 排名已保存: {out}\n")
+        return 0
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
         print(f"\n  [ERROR] {exc}\n")
         return 1
 
 
-def _cmd_rank_local(args, candidate, weights) -> int:
-    """本地模式：jds/ 目录单阶段打分（原行为）。"""
-    jds = load_jds_from_local(args.jd_dir)
-
-    # 打分 + 排序
-    try:
-        ranked = rank_jds(candidate, jds, topk=args.topk, weights=weights)
-    except ValueError as exc:
-        print(f"\n  [ERROR] 权重配置错误: {exc}\n")
-        return 1
-
-    _print_jd_table(ranked, title="六维加权初筛排名（本地 JSON，总分 = Σ 权重×维度覆盖率）")
-    out = ANALYSIS_DIR / "rank_result.json"
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(ranked, f, ensure_ascii=False, indent=2)
-    print(f"\n  [rank] 结果已保存: {out}\n")
-    return 0
 
 
-def _cmd_rank_neo4j(args, candidate, weights) -> int:
-    """Neo4j 两阶段：Role 粗排 → 候选 Role 旗下 JD 细排（CSV 增强）。"""
-    stage = getattr(args, "stage", "both")
-
-    # ============ 阶段 1：Role 粗排 ============
-    print(f"\n  [阶段1] 从 Neo4j 加载 Role 核心技能并粗排 ...")
-    roles = load_roles_from_neo4j()
-    ranked_roles = rank_roles(candidate, roles, topk=args.role_topk)
-    print(f"  [阶段1] {len(roles)} 个 Role，保留 Top {len(ranked_roles)}")
-
-    if stage in ("role", "both"):
-        _print_role_table(ranked_roles)
-
-    if stage == "role":
-        # 仅输出 Role 排名
-        out = ANALYSIS_DIR / "rank_result.json"
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(ranked_roles, f, ensure_ascii=False, indent=2)
-        print(f"\n  [rank] Role 排名已保存: {out}\n")
-        return 0
-
-    # ============ 阶段 2：候选 Role 旗下 JD 细排 ============
-    role_names = [r["role_name"] for r in ranked_roles]
-    print(f"\n  [阶段2] 加载 {len(role_names)} 个候选 Role 旗下的 JD ...")
-    jds = load_jds_by_roles(role_names)
-
-    # CSV 增强：优先用完整能力分析结果
-    csv_dir = getattr(args, "csv_dir", "") or ""
-    if csv_dir:
-        try:
-            jds, matched, total = enrich_jds_with_csv(jds, csv_dir)
-            print(f"  [阶段2] CSV 完整六维增强: {matched}/{total} 个 JD 匹配成功")
-        except (FileNotFoundError, OSError) as exc:
-            print(f"  [阶段2] CSV 加载失败，回退图谱技能: {exc}")
-
-    if not jds:
-        print("\n  [ERROR] 候选 Role 下没有 JD\n")
-        return 1
-
-    # 打分 + 排序
-    try:
-        ranked = rank_jds(candidate, jds, topk=args.topk, weights=weights)
-    except ValueError as exc:
-        print(f"\n  [ERROR] 权重配置错误: {exc}\n")
-        return 1
-
-    _print_jd_table(ranked, title="六维加权细排（候选 Role 内，总分 = Σ 权重×维度覆盖率）")
-
-    # 保存两阶段结果
-    out = ANALYSIS_DIR / "rank_result.json"
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(
-            {"roles": ranked_roles, "jds": ranked},
-            f, ensure_ascii=False, indent=2,
-        )
-    print(f"\n  [rank] 两阶段结果已保存: {out}\n")
-    return 0
-
-
-def _print_role_table(ranked_roles) -> None:
-    """打印 Role 粗排表。"""
+def _print_role_table(ranked_roles, title: str = "Role 粗排") -> None:
+    """打印 Role 排名表。"""
     def _pad(text: str, width: int) -> str:
         disp = sum(2 if ord(c) > 0x2E80 else 1 for c in str(text))
         return str(text) + " " * max(0, width - disp)
 
     print("\n" + "=" * 100)
-    print("  阶段 1：Role 粗排（权重覆盖率 = Σ命中技能×final_score / Σfinal_score）")
+    print(f"  {title}")
     print("=" * 100)
     header = "  " + _pad("#", 3) + _pad("标准职业", 22) + _pad("家族", 16)         + _pad("领域", 16) + _pad("旗下JD", 8) + _pad("命中", 6) + _pad("得分", 8)
     print(header)
@@ -318,38 +253,6 @@ def _print_role_table(ranked_roles) -> None:
             + _pad(str(item.get("jd_count", 0)), 8)
             + _pad(f"{item.get('hit_skills', 0)}/{item.get('total_skills', 0)}", 6)
             + _pad(f"{item['score']:.4f}", 8)
-        )
-        print(row)
-    print("=" * 100)
-
-
-def _print_jd_table(ranked, title) -> None:
-    """打印 JD 排名表（六维）。"""
-    def _pad(text: str, width: int) -> str:
-        disp = sum(2 if ord(c) > 0x2E80 else 1 for c in str(text))
-        return str(text) + " " * max(0, width - disp)
-
-    labels = {
-        "knowledge": "知识",
-        "skill": "技术",
-        "qualifications": "任职",
-        "motivation": "动机",
-        "trait": "特质",
-        "self_concept": "自我",
-    }
-    print("\n" + "=" * 100)
-    print(f"  {title}")
-    print("=" * 100)
-    header = "  " + _pad("#", 3) + _pad("岗位名称", 24) + _pad("总分", 8)
-    header += "".join(_pad(labels[d], 9) for d in DIMENSION_KEYS)
-    print(header)
-    print("  " + "-" * 96)
-    for idx, item in enumerate(ranked, 1):
-        dims = item["dim_scores"]
-        row = (
-            "  " + _pad(idx, 3) + _pad(item["job_title"], 24)
-            + _pad(f"{item['total_score']:.4f}", 8)
-            + "".join(_pad(f"{dims[d]['score']:.3f}", 9) for d in DIMENSION_KEYS)
         )
         print(row)
     print("=" * 100)
@@ -402,6 +305,8 @@ def main():
     p_extract.add_argument("file")
     p_extract.add_argument("-r", "--requirements", help="用户重点关注方向")
     p_extract.add_argument("-s", "--schema", help="自定义提取 schema JSON 路径")
+    p_extract.add_argument("--mode", choices=["llm", "rule"], default="llm",
+                           help="提取路线：llm DeepSeek 提取（默认）/ rule 脚本规则提取")
     p_extract.add_argument("--fast", action="store_true", help="使用快速模型")
 
     p_analyze = subparsers.add_parser("analyze", help="简历 vs 单 JD 差距分析 + 学习路径")
@@ -419,26 +324,11 @@ def main():
     p_batch.add_argument("--workers", type=int, default=3, help="并行路数（默认 3）")
     p_batch.add_argument("--fast", action="store_true", help="使用快速模型")
 
-    p_rank = subparsers.add_parser("rank", help="六维加权打分初筛（非 LLM）+ Neo4j 图匹配增强")
+    p_rank = subparsers.add_parser("rank", help="Role 级别职位匹配（Neo4j 核心技能覆盖率）")
     p_rank.add_argument("-r", "--resume", required=True, help="简历 JSON 或原始 pdf/docx")
-    p_rank.add_argument("-j", "--jd-dir", default="jds",
-                        help="JD 目录（--source local 时需要，默认 jds/；--source neo4j 时忽略）")
     p_rank.add_argument("--requirements", help="用户重点关注方向（仅原始简历文件需要）")
     p_rank.add_argument("-s", "--schema", help="自定义提取 schema JSON 路径（仅原始简历文件需要）")
     p_rank.add_argument("--topk", type=int, default=0, help="只输出前 N 名（0=全部，默认）")
-    p_rank.add_argument("--source", choices=["local", "neo4j"], default="local",
-                        help="JD 数据来源：local 本地 JSON（默认）/ neo4j 图谱")
-    p_rank.add_argument("--weights", help="自定义权重 JSON 路径（可选，自动归一化）")
-    p_rank.add_argument("--graph", type=float, default=0.0,
-                        help="图匹配融合权重 [0,1]（需 Neo4j + resume-graph-match；0=纯文本，默认）")
-    p_rank.add_argument("--min-features", type=int, default=6,
-                        help="仅 --source neo4j：过滤六维总条目数少于该值的 JD（默认 6，0=不过滤）")
-    p_rank.add_argument("--role-topk", type=int, default=10,
-                        help="阶段1 Role 粗排保留数量（默认 10，0=全部）")
-    p_rank.add_argument("--stage", choices=["both", "role", "jd"], default="both",
-                        help="输出阶段：both 两阶段都输出（默认）/ role 仅 Role 粗排 / jd 仅 JD 细排")
-    p_rank.add_argument("--csv-dir", default="",
-                        help="提取后原始数据 CSV 目录；提供后用 CSV 完整六维增强 JD（默认自动回退图谱技能）")
 
     p_stats = subparsers.add_parser("stats", help="查看数据源统计（本地 / Neo4j）")
     p_stats.add_argument("--source", choices=["local", "neo4j"], default="local",

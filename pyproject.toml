@@ -1,6 +1,6 @@
 [project]
 name = "resume-extraction-agent"
-version = "0.1.1"
+version = "0.2.0"
 description = "LangGraph-based agent for extracting structured info from resumes"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,6 +13,9 @@ dependencies = [
     "pdfplumber>=0.11",
     "python-dotenv>=1.0",
     "neo4j>=5.0",
+    "streamlit>=1.28",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
 ]
 
 # 代码以源码方式运行（python src/main.py），不打包成 Python 包；
