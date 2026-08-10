@@ -15,7 +15,13 @@ from pathlib import Path
 # 保证以源码方式运行时能 import src
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from mcp.server.fastmcp import FastMCP, Image
+# mcp SDK 版本兼容：1.x 用 FastMCP，2.x 用 MCPServer（两者对下方用法接口一致）
+try:
+    from mcp.server.fastmcp import FastMCP, Image  # mcp 1.x
+    _ServerCls = FastMCP
+except ImportError:  # mcp 2.x
+    from mcp.server.mcpserver import MCPServer, Image
+    _ServerCls = MCPServer
 
 from src.core.dimensions import DIMENSION_KEYS, DIM_LABELS, CATEGORY_TO_DIM
 from src.tools.rank import rank_resume as _rank_resume
@@ -23,7 +29,7 @@ from src.tools.enhance import enhance_matches as _enhance_matches
 from src.tools.analyze import analyze_gap as _analyze_gap
 from src.tools.visualize import render_radar as _render_radar
 
-mcp = FastMCP("resume-analysis", instructions="简历职位匹配分析工具：关键词命中粗排 → LLM 复核 → 差距分析 → 雷达图。")
+mcp = _ServerCls("resume-analysis", instructions="简历职位匹配分析工具：关键词命中粗排 → LLM 复核 → 差距分析 → 雷达图。")
 
 
 # ==================== 静态资源 ====================

@@ -6,9 +6,10 @@ from typing import Any, Dict, Optional
 
 from ..core.dimensions import DIMENSION_KEYS, DIM_LABELS
 
-# matplotlib 中文字体
+# matplotlib：强制 Agg 后端（服务/子进程环境无 GUI，且 conda 环境可能缺 init.tcl）
 import matplotlib
 
+matplotlib.use("Agg")
 matplotlib.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
