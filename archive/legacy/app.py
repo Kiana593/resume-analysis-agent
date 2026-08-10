@@ -1,4 +1,4 @@
-﻿"""简历提取分析 Web 前端（轻量化版）。
+"""简历提取分析 Web 前端（轻量化版）。
 
 流程：上传简历 → markitdown 转 Markdown → 原文命中搜索 → Role 排名 → 雷达图 + 高亮 → LLM 建议。
 运行: streamlit run app.py

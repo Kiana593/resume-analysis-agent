@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
@@ -39,7 +38,7 @@ def _repair_json(content: str) -> str:
     stripped = content.rstrip()
     stack: list[str] = []
     for ch in stripped:
-        if ch in "{[":
+        if ch in "{[":  # noqa: SIM114
             stack.append(ch)
         elif ch in "}]" and stack:
             stack.pop()
@@ -65,6 +64,9 @@ def call_deepseek_json(prompt: str, temperature: float = 0.0) -> dict[str, Any]:
     Raises:
         RuntimeError: LLM 调用失败或返回内容无法解析为 JSON
     """
+    # 懒加载：仅实际调用 LLM 时才引入 langchain-openai
+    from langchain_openai import ChatOpenAI
+
     llm = ChatOpenAI(
         model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         api_key=os.getenv("DEEPSEEK_API_KEY"),
