@@ -39,6 +39,9 @@ python mcp_server.py --transport sse
 - **Continue**：`~/.continue/config.json` 的 `mcpServers`
 - **Codex / 其他 CLI**：`codex mcp add` 指向 `python mcp_server.py`
 
+> 注意：`command` 必须指向**装有 mcp SDK 的 Python**（如 conda 环境的绝对路径），
+> 不能是系统默认 `python`（若其未安装 mcp）。`mcp.json.example` 已给出本机示例。
+
 ## CLI 用法（非 MCP 场景）
 
 ```bash
