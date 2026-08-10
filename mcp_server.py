@@ -15,6 +15,11 @@ from pathlib import Path
 # 保证以源码方式运行时能 import src
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# 主动加载项目根目录 .env（无论启动 cwd 在哪，enhance/analyze 都能读到 DEEPSEEK_API_KEY）
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 # mcp SDK 版本兼容：1.x 用 FastMCP，2.x 用 MCPServer（两者对下方用法接口一致）
 try:
     from mcp.server.fastmcp import FastMCP, Image  # mcp 1.x

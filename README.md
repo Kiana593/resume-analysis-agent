@@ -42,6 +42,29 @@ python mcp_server.py --transport sse
 > 注意：`command` 必须指向**装有 mcp SDK 的 Python**（如 conda 环境的绝对路径），
 > 不能是系统默认 `python`（若其未安装 mcp）。`mcp.json.example` 已给出本机示例。
 
+### Codex 接入（config.toml）
+
+编辑 `C:\Users\Kianak901\.codex\config.toml`，在 `[mcp_servers]` 段后追加：
+
+```toml
+[mcp_servers.resume-analysis]
+command = 'C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe'
+args = ['D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\mcp_server.py']
+startup_timeout_sec = 30
+
+[mcp_servers.resume-analysis.env]
+STORE_BACKEND = "memory"
+```
+
+保存后**重启 Codex**（MCP server 在启动时加载），新会话即可使用
+`rank_resume` / `enhance_matches` / `visualize_radar` / `analyze_gap` 四个工具。
+
+或使用 CLI 命令添加（效果相同）：
+
+```powershell
+codex mcp add resume-analysis -- C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\mcp_server.py
+```
+
 ## CLI 用法（非 MCP 场景）
 
 ```bash
