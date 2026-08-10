@@ -47,6 +47,14 @@ async def _run_handshake() -> dict:
 
 def test_stdio_handshake_and_rank():
     out = asyncio.run(_run_handshake())
-    assert {"rank_resume", "enhance_matches", "visualize_radar", "analyze_gap"} <= out["tool_names"]
+    assert {
+        "rank_resume",
+        "prepare_enhance",
+        "apply_enhance_review",
+        "prepare_gap",
+        "prepare_resume_edit",
+        "validate_resume_edit",
+        "visualize_radar",
+    } <= out["tool_names"]
     assert "results" in out["rank_text"]
     assert {"dimensions://seven", "dimensions://category-map"} <= out["resource_uris"]

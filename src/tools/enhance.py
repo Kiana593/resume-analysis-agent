@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, Optional
 
 from ..prompts.enhance import ENHANCE_PROMPT
+from ..core.review import check_review_structure, merge_enhance_review
 from ..utils.llm import call_deepseek_json
 
 
@@ -28,6 +29,70 @@ def _trim_rank_result(rank_result: Dict[str, Any], topk: int) -> Dict[str, Any]:
             }
         )
     return {"topk": len(trimmed), "results": trimmed}
+
+
+def prepare_enhance(
+    rank_result: Dict[str, Any],
+    resume_text: str,
+    topk: int = 20,
+) -> Dict[str, Any]:
+    """Agent mode: build the review payload without calling any LLM API.
+
+    The agent uses its own model to perform the semantic review, then calls
+    apply_enhance_review(rank_json=full rank_resume result, review_json=...)
+    to merge and normalize.
+    """
+    trimmed = _trim_rank_result(rank_result, topk)
+    text = (resume_text or "").strip()
+    prompt = ENHANCE_PROMPT.format(
+        topk=len(trimmed["results"]),
+        resume_text=text[:12000],
+        rank_json=json.dumps(trimmed, ensure_ascii=False),
+    )
+    return {
+        "mode": "agent_review",
+        "purpose": "Review the keyword ranking with your own model and fix false hits/misses",
+        "prompt": prompt,
+        "rank_data": trimmed,
+        "resume_text": text[:12000],
+        "output_schema": {
+            "topk": "number of reviewed roles",
+            "results": [
+                {
+                    "role_name": "must match input role name",
+                    "score": "recomputed score 0~1",
+                    "hit_skills": "hit count",
+                    "total_skills": "total count",
+                    "review_note": "what was corrected, or no-change note",
+                    "dimensions": {
+                        "knowledge/skill/qualifications/preference/motivation/trait/self_concept": {
+                            "hit": ["skills truly demonstrated"],
+                            "miss": ["skills missing"],
+                        }
+                    },
+                }
+            ],
+        },
+        "next_step": "call apply_enhance_review(rank_json, review_json) after reviewing",
+    }
+
+
+def apply_enhance_review(
+    raw_rank_result: Dict[str, Any],
+    review_json: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Agent mode: merge the agent's review JSON back into the rank result.
+
+    Pure logic, no LLM call. Recomputes coverage and scores deterministically.
+    """
+    if not raw_rank_result or not raw_rank_result.get("results"):
+        raise ValueError("raw_rank_result is empty; run rank_resume first")
+    if not isinstance(review_json, dict) or not review_json.get("results"):
+        raise ValueError("review_json invalid: expected a results array")
+    problems = check_review_structure(review_json)
+    if problems:
+        raise ValueError("review_json 结构异常: " + "; ".join(problems))
+    return merge_enhance_review(raw_rank_result, review_json)
 
 
 def enhance_matches(

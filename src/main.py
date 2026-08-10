@@ -9,15 +9,21 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 from src.store import create_store
 from src.tools.rank import rank_resume
 from src.tools.enhance import enhance_matches
 from src.tools.analyze import analyze_gap
+from src.tools.modify import suggest_resume_edit
 from src.utils.text import convert_to_markdown
 
 
@@ -36,7 +42,7 @@ def _read_resume(resume_src: str) -> str:
 
 def cmd_rank(args) -> int:
     resume_text = _read_resume(args.resume)
-    store = create_store(args.store)
+    store = create_store(args.store or os.environ.get("STORE_BACKEND") or "memory")
     result = rank_resume(resume_text, topk=args.topk, store=store)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -58,6 +64,16 @@ def cmd_analyze(args) -> int:
     role = _load_json(args.role)
     resume_text = _read_resume(args.resume)
     result = analyze_gap(role, resume_text)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_modify(args) -> int:
+    role = _load_json(args.role)
+    if "results" in role and isinstance(role["results"], list) and role["results"]:
+        role = role["results"][0]
+    resume_text = _read_resume(args.resume)
+    result = suggest_resume_edit(role, resume_text)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -93,10 +109,12 @@ def main() -> None:
     p_analyze.add_argument("-r", "--role", required=True, help="单个 role JSON 文件")
     p_analyze.add_argument("--resume", required=True, help="简历文件（PDF/DOCX/MD/TXT）")
 
+    p_modify = subparsers.add_parser("modify", help="针对目标岗位生成简历修改建议")
+    p_modify.add_argument("-r", "--role", required=True, help="单个 role JSON 文件（或 rank 结果文件）")
+    p_modify.add_argument("--resume", required=True, help="简历文件（PDF/DOCX/MD/TXT）")
+
     args = parser.parse_args()
     if args.store is not None:
-        import os
-
         os.environ["STORE_BACKEND"] = args.store
 
     if args.command == "rank":
@@ -105,6 +123,8 @@ def main() -> None:
         sys.exit(cmd_enhance(args))
     elif args.command == "analyze":
         sys.exit(cmd_analyze(args))
+    elif args.command == "modify":
+        sys.exit(cmd_modify(args))
 
 
 if __name__ == "__main__":

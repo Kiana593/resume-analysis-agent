@@ -15,7 +15,8 @@ from pathlib import Path
 # 保证以源码方式运行时能 import src
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# 主动加载项目根目录 .env（无论启动 cwd 在哪，enhance/analyze 都能读到 DEEPSEEK_API_KEY）
+# 主动加载项目根目录 .env（CLI 的 enhance/analyze/modify 需要 DEEPSEEK_API_KEY；
+# MCP 模式不调用 LLM API，LLM 推理由调用方 Agent 自己的模型完成）
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -30,11 +31,14 @@ except ImportError:  # mcp 2.x
 
 from src.core.dimensions import DIMENSION_KEYS, DIM_LABELS, CATEGORY_TO_DIM
 from src.tools.rank import rank_resume as _rank_resume
-from src.tools.enhance import enhance_matches as _enhance_matches
-from src.tools.analyze import analyze_gap as _analyze_gap
+from src.tools.enhance import prepare_enhance as _prepare_enhance
+from src.tools.enhance import apply_enhance_review as _apply_enhance_review
+from src.tools.analyze import prepare_gap as _prepare_gap
+from src.tools.modify import prepare_resume_edit as _prepare_resume_edit
+from src.tools.modify import validate_resume_edit as _validate_resume_edit
 from src.tools.visualize import render_radar as _render_radar
 
-mcp = _ServerCls("resume-analysis", instructions="简历职位匹配分析工具：关键词命中粗排 → LLM 复核 → 差距分析 → 雷达图。")
+mcp = _ServerCls("简历岗位匹配分析", instructions="简历人岗匹配分析工具：关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 雷达图。MCP 模式不调用外部 LLM API，语义复核/差距分析/修改建议由调用方 Agent 用自己的大模型完成。")
 
 
 # ==================== 静态资源 ====================
@@ -70,8 +74,11 @@ def rank_resume(resume_text: str, topk: int = 10) -> dict:
 
 
 @mcp.tool()
-def enhance_matches(rank_json: str, resume_text: str, topk: int = 20) -> dict:
-    """用一次 LLM 调用复核 rank_resume 的结果，修正关键词误判。
+def prepare_enhance(rank_json: str, resume_text: str, topk: int = 20) -> dict:
+    """为语义复核准备提示包：返回复核提示词 + 精简排名数据 + 输出 schema。
+
+    MCP 模式不调用 LLM API：Agent 拿到提示包后，用自己的大模型完成复核，
+    再调用 apply_enhance_review(rank_json, review_json) 合并规范化结果。
 
     Args:
         rank_json: rank_resume 返回结果的 JSON 字符串。
@@ -79,10 +86,27 @@ def enhance_matches(rank_json: str, resume_text: str, topk: int = 20) -> dict:
         topk: 复核前 N 名（默认 20）。
 
     Returns:
-        LLM 修正后的 JSON（含 review_note 说明修正内容）。
+        {"mode", "prompt", "rank_data", "resume_text", "output_schema", "next_step"}
     """
     rank_result = json.loads(rank_json)
-    return _enhance_matches(rank_result, resume_text, topk=topk)
+    return _prepare_enhance(rank_result, resume_text, topk=topk)
+
+
+@mcp.tool()
+def apply_enhance_review(rank_json: str, review_json: str) -> dict:
+    """把 Agent 复核后的 JSON 合并回粗排结果，重算覆盖率与得分（纯逻辑）。
+
+    Args:
+        rank_json: rank_resume 返回结果的完整 JSON 字符串。
+        review_json: Agent 按 prepare_enhance 的输出 schema 生成的复核 JSON。
+
+    Returns:
+        {"topk", "results": [{role_name, score, hit_skills, total_skills,
+                              review_note, dimensions}]}
+    """
+    rank_result = json.loads(rank_json)
+    review = json.loads(review_json)
+    return _apply_enhance_review(rank_result, review)
 
 
 @mcp.tool()
@@ -102,18 +126,58 @@ def visualize_radar(role_json: str, role_name: str = "") -> Image:
 
 
 @mcp.tool()
-def analyze_gap(role_json: str, resume_text: str) -> dict:
-    """生成单个 Role 的差距分析与学习路径（LLM 生成）。
+def prepare_gap(role_json: str, resume_text: str) -> dict:
+    """为差距分析准备提示包：返回分析提示词 + 岗位命中明细 + 简历原文。
+
+    Agent 用自己的模型生成 Markdown 报告（匹配结论 / 各维分析 / 总体建议 / 学习路径）。
 
     Args:
-        role_json: rank_resume 结果中单个 role 的 JSON 字符串。
+        role_json: rank_resume 或复核结果中单个 role 的 JSON 字符串。
         resume_text: 简历 Markdown 原文。
 
     Returns:
-        {"role_name", "analysis": {...}, "markdown": "..."}
+        {"mode", "prompt", "role_name", "dimension_details", "resume_text", "output_format"}
     """
     role = json.loads(role_json)
-    return _analyze_gap(role, resume_text)
+    return _prepare_gap(role, resume_text)
+
+
+@mcp.tool()
+def prepare_resume_edit(role_json: str, resume_text: str) -> dict:
+    """为简历修改准备提示包：目标岗位技能命中明细 + 修改规则 + 输出 schema。
+
+    Agent 用自己的模型产出针对性修改建议（不重写全文，遵守真实性红线）。
+
+    Args:
+        role_json: rank_resume 或复核结果中单个 role 的 JSON 字符串。
+        resume_text: 简历 Markdown 原文。
+
+    Returns:
+        {"mode", "prompt", "role_name", "skill_lines", "resume_text",
+         "ai_phrase_blacklist", "output_schema"}
+    """
+    role = json.loads(role_json)
+    return _prepare_resume_edit(role, resume_text)
+
+
+@mcp.tool()
+def validate_resume_edit(role_json: str, resume_text: str, edit_json: str) -> dict:
+    """对 Agent 生成的简历修改建议做防造假校验（纯逻辑，不调用 LLM）。
+
+    校验：技能是否在岗位技能清单、状态一致性、量化指标是否有简历依据、
+    AI 味词汇。返回 {"valid", "summary", "violations", "stats", "checklist"}。
+
+    Args:
+        role_json: 单个 role 的 JSON 字符串（含 dimensions hit/miss）。
+        resume_text: 简历 Markdown 原文。
+        edit_json: prepare_resume_edit 输出 schema 对应的建议 JSON 字符串。
+
+    Returns:
+        防造假校验报告。
+    """
+    role = json.loads(role_json)
+    edit = json.loads(edit_json)
+    return _validate_resume_edit(role, resume_text, edit)
 
 
 # ==================== 入口 ====================

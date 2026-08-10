@@ -55,6 +55,36 @@ def _format_markdown(role: Dict[str, Any], llm_result: Dict[str, Any]) -> str:
     return "\n".join(md)
 
 
+def prepare_gap(role: Dict[str, Any], resume_text: str) -> Dict[str, Any]:
+    """Agent mode: build the gap-analysis payload without calling any LLM API.
+
+    The agent uses its own model to write the gap analysis + learning path,
+    and returns a Markdown report directly (no server-side normalization).
+    """
+    text = (resume_text or "").strip()
+    if not role or not role.get("role_name"):
+        raise ValueError("role invalid: missing role_name")
+    prompt = ROLE_GAP_PROMPT.format(
+        role_name=role.get("role_name", ""),
+        family_name=role.get("family_name", ""),
+        domain_name=role.get("domain_name", ""),
+        dimension_details=_build_dimension_details(role),
+        resume_raw_text=text[:12000],
+    )
+    return {
+        "mode": "agent_analysis",
+        "purpose": "Write a gap analysis and learning path with your own model",
+        "prompt": prompt,
+        "role_name": role.get("role_name", ""),
+        "dimension_details": _build_dimension_details(role),
+        "resume_text": text[:12000],
+        "output_format": (
+            "Markdown report with: match verdict, per-dimension analysis, "
+            "overall advice, numbered learning path"
+        ),
+    }
+
+
 def analyze_gap(
     role: Dict[str, Any],
     resume_text: str,
