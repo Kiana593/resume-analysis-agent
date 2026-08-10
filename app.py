@@ -1,17 +1,13 @@
-"""简历提取分析 Web 前端 —— Streamlit 简易界面。
+"""简历提取分析 Web 前端（轻量化版）。
 
-流程：拖入简历 → 提取预览 → Role 排名 → 六维详情 → LLM 差距分析。
+流程：上传简历 → markitdown 转 Markdown → 原文命中搜索 → Role 排名 → 雷达图 + 高亮 → LLM 建议。
 运行: streamlit run app.py
 """
 
 import streamlit as st
-import sys
-import json
-import os
-import tempfile
+import sys, os, json, tempfile, re
 from pathlib import Path
 
-# 项目根目录加入 path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(str(PROJECT_ROOT))
@@ -19,262 +15,207 @@ os.chdir(str(PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.graph import extract_graph
 from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles, compute_dimension_hits, DIM_LABELS
-from src.main import load_extraction_schema
 from src.prompts.gap_analysis import ROLE_GAP_PROMPT
 from src.utils.llm import call_deepseek_json
+
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
-matplotlib.rcParams['axes.unicode_minus'] = False
+matplotlib.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
+matplotlib.rcParams["axes.unicode_minus"] = False
 import numpy as np
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="简历提取分析", page_icon="📄", layout="wide")
-st.title("📄 简历提取分析系统")
+st.set_page_config(page_title="简历分析", page_icon="📄", layout="wide")
+st.title("📄 简历职位匹配分析")
+
+DIM_ORDER = ("knowledge", "skill", "qualifications", "preference", "motivation", "trait", "self_concept")
 
 # ==================== 缓存 ====================
-
 @st.cache_data(ttl=3600)
 def cached_load_roles():
     return load_roles_from_neo4j()
 
-@st.cache_data
-def run_extract_graph(file_path, mode):
-    """运行提取图，返回 resume_data。"""
-    schema = load_extraction_schema()
-    initial = {
-        "file_path": file_path,
-        "extraction_schema": schema,
-        "user_requirements": None,
-        "extraction_mode": mode,
-    }
-    merged = dict(initial)
-    for step_output in extract_graph.stream(initial):
-        for _, partial in step_output.items():
-            if partial:
-                merged.update(partial)
-    if merged.get("error"):
-        raise RuntimeError(merged["error"])
-    return merged.get("resume_data", {})
+def convert_to_markdown(file_bytes, suffix):
+    """PDF/DOCX -> Markdown via markitdown."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        result = md.convert(tmp_path)
+        text = result.text_content.strip()
+        if not text:
+            raise ValueError("markitdown returned empty")
+        return text
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
-def run_role_analysis(resume_data, role_full):
-    """用精简 prompt 做 Role 级别差距分析（非图流程，直接 LLM 调用）。"""
-    candidate = resume_data.get("five_dim", {})
-    skills = role_full.get("skills", [])
-    hits = compute_dimension_hits(candidate, skills)
+def highlight_text(raw_text, hits):
+    """在原文中高亮命中的技能名。"""
+    # Collect all positions, sort by start
+    positions = []
+    for h in hits:
+        for s, e in h.get("positions", []):
+            positions.append((s, e))
+    positions.sort(key=lambda x: x[0])
 
-    # 构建维度明细文本
-    parts = []
-    for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
-        d = hits.get(dim)
-        if not d:
-            continue
-        label = DIM_LABELS.get(dim, dim)
-        hit_str = ", ".join(d["hit"][:8]) if d["hit"] else "(none)"
-        miss_str = ", ".join(d["miss"][:8]) if d["miss"] else "(none)"
-        parts.append(
-            f"**{label}** ({d['hit_count']}/{d['total']} hit):\n"
-            f"  Hit: {hit_str}\n"
-            f"  Miss: {miss_str}"
-        )
+    # Merge overlapping
+    merged = []
+    for s, e in positions:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
 
-    prompt = ROLE_GAP_PROMPT.format(
-        role_name=role_full.get("role_name", ""),
-        family_name=role_full.get("family_name", ""),
-        domain_name=role_full.get("domain_name", ""),
-        dimension_details="\n\n".join(parts),
-        resume_raw_text=resume_data.get("raw_text", "")[:1500],
-    )
-
-    result = call_deepseek_json(prompt)
-    return result
+    # Build highlighted text
+    result = []
+    prev = 0
+    for s, e in merged:
+        # Escape HTML
+        seg = raw_text[prev:s].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        hit_seg = raw_text[s:e].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        result.append(seg)
+        result.append(f"<mark>{hit_seg}</mark>")
+        prev = e
+    result.append(raw_text[prev:].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return "".join(result)
 
 # ==================== Session State ====================
-for key in ["resume_data", "ranked_roles", "selected_role_idx", "analysis_result", "extracted_file", "all_roles"]:
+for key in ["raw_text", "ranked_roles", "selected_role_idx", "analysis_result", "all_roles", "uploaded_name"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
 # ==================== Sidebar ====================
 with st.sidebar:
     st.header("⚙️ 设置")
-    extraction_mode = st.radio(
-        "提取模式",
-        ["llm", "rule"],
-        format_func=lambda x: "🤖 LLM 提取" if x == "llm" else "📐 规则提取",
-    )
-    if extraction_mode == "llm":
-        use_fast = st.checkbox("快速模型 (deepseek-v4-flash)")
-        os.environ["DEEPSEEK_MODEL"] = "deepseek-v4-flash" if use_fast else os.environ.pop("DEEPSEEK_MODEL", "deepseek-v4-pro")
-    
+    use_fast = st.checkbox("快速模型 (deepseek-v4-flash)")
+    os.environ["DEEPSEEK_MODEL"] = "deepseek-v4-flash" if use_fast else os.environ.pop("DEEPSEEK_MODEL", "deepseek-v4-pro")
+
     st.divider()
     neo4j_ok = bool(os.getenv("NEO4J_PASSWORD"))
-    st.caption("Neo4j:" + (" ✅" if neo4j_ok else " ❌ 未配置 .env"))
-    
-    st.divider()
-    st.caption("用法: streamlit run app.py")
+    st.caption(f"Neo4j: {'✅' if neo4j_ok else '❌ 未配置'}")
 
-# ==================== Step 1: 上传 & 提取 ====================
-
+# ==================== Step 1: Upload ====================
 st.header("1️⃣ 上传简历")
-uploaded_file = st.file_uploader(
-    "拖拽简历文件到此处（支持 PDF / DOCX）",
-    type=["pdf", "docx"],
-)
+uploaded_file = st.file_uploader("拖拽 PDF/DOCX 到此处", type=["pdf", "docx"])
 
 if uploaded_file is not None:
-    # 保存到临时文件
     suffix = Path(uploaded_file.name).suffix
-    tmp_path = str(PROJECT_ROOT / "results" / f"_upload_{uploaded_file.name}")
-    Path(tmp_path).parent.mkdir(exist_ok=True)
-    with open(tmp_path, "wb") as f:
-        f.write(uploaded_file.getvalue())
-    
     col_a, col_b = st.columns([2, 1])
     with col_a:
         st.info(f"📎 {uploaded_file.name} ({uploaded_file.size / 1024:.0f} KB)")
     with col_b:
-        extract_btn = st.button("🔍 提取简历六维", type="primary")
-    
-    if extract_btn:
-        try:
-            with st.spinner("正在提取..."):
-                rd = run_extract_graph(tmp_path, extraction_mode)
-                st.session_state.resume_data = rd
-                st.session_state.ranked_roles = None
-                st.session_state.selected_role_idx = None
-                st.session_state.analysis_result = None
-                st.session_state.extracted_file = uploaded_file.name
-            st.success("✅ 提取完成！")
-            st.rerun()
-        except Exception as e:
-            st.error(f"提取失败: {e}")
+        if st.button("📄 解析简历", type="primary"):
+            with st.spinner("markitdown 转换中..."):
+                try:
+                    raw = convert_to_markdown(uploaded_file.getvalue(), suffix)
+                    st.session_state.raw_text = raw
+                    st.session_state.ranked_roles = None
+                    st.session_state.selected_role_idx = None
+                    st.session_state.analysis_result = None
+                    st.session_state.uploaded_name = uploaded_file.name
+                    st.success(f"✅ 解析完成 ({len(raw)} 字符)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"解析失败: {e}")
 
-# ==================== Step 2: 简历预览 ====================
+# ==================== Step 2: Markdown Preview ====================
+if st.session_state.raw_text:
+    st.header(f"2️⃣ 简历原文 — {st.session_state.uploaded_name or ''}")
+    with st.expander("查看 Markdown 原文", expanded=False):
+        st.text_area("", st.session_state.raw_text, height=300, label_visibility="collapsed")
 
-if st.session_state.resume_data:
-    rd = st.session_state.resume_data
-    five_dim = rd.get("five_dim", {})
-    
-    st.header(f"2️⃣ 简历预览 — {st.session_state.extracted_file or ''}")
-    
-    # 基本信息行
-    pi = five_dim.get("personal_info", {})
-    pinfo_items = [f"{k}: {v}" for k, v in pi.items() if v]
-    if pinfo_items:
-        st.write(" | ".join(pinfo_items))
-    
-    # 六维展示
-    tabs = st.tabs(["📚 知识", "🔧 技能", "🎓 学历", "💪 动机", "🧠 特质", "🤝 自我概念"])
-    dim_map = [
-        ("knowledge", "知识", five_dim.get("knowledge", [])),
-        ("skill", "技能", five_dim.get("skill", [])),
-        ("qualifications", "学历/专业", five_dim.get("qualifications", [])),
-        ("motivation", "动机", five_dim.get("motivation", [])),
-        ("trait", "特质", five_dim.get("trait", [])),
-        ("self_concept", "自我概念", five_dim.get("self_concept", [])),
-    ]
-    for tab, (_, _, items) in zip(tabs, dim_map):
-        with tab:
-            if items:
-                for item in items:
-                    st.write(f"• {item}")
-            else:
-                st.caption("（未提取到）")
-
-# ==================== Step 3: Role 排名 ====================
-
-if st.session_state.resume_data:
+# ==================== Step 3: Rank ====================
+if st.session_state.raw_text:
     st.header("3️⃣ 职位匹配排名")
-    
-    if st.button("📊 分析职位匹配", type="primary", disabled=not neo4j_ok):
-        try:
-            with st.spinner("正在从 Neo4j 加载数据并计算匹配度..."):
-                candidate = st.session_state.resume_data.get("five_dim", {})
+
+    if st.button("📊 开始匹配", type="primary", disabled=not neo4j_ok):
+        with st.spinner("匹配中..."):
+            try:
                 roles = cached_load_roles()
-                ranked = rank_roles(candidate, roles, topk=20)
+                ranked = rank_roles(st.session_state.raw_text, roles, topk=20)
                 st.session_state.all_roles = roles
                 st.session_state.ranked_roles = ranked
                 st.session_state.selected_role_idx = None
                 st.session_state.analysis_result = None
-            st.success(f"共匹配 {len(roles)} 个职业方向，显示 Top {len(ranked)}")
-            st.rerun()
-        except Exception as e:
-            st.error(f"匹配失败: {e}")
+                st.success(f"共 {len(roles)} 个职业，显示 Top {len(ranked)}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"匹配失败: {e}")
 
-# ==================== Step 4: 排名表 + 选择 ====================
-
+# ==================== Step 4: Role Detail ====================
 if st.session_state.ranked_roles:
     ranked = st.session_state.ranked_roles
-    
-    # 构建选项
     options = [
-        f"#{i} {r['role_name']} — 得分: {r['score']:.4f} — 命中: {r.get('hit_skills',0)}/{r.get('total_skills',0)}"
+        f"#{i} {r['role_name']} — {r['score']:.2%} — {r.get('hit_skills',0)}/{r.get('total_skills',0)}"
         for i, r in enumerate(ranked, 1)
     ]
-    
-    col_sel, col_btn = st.columns([3, 1])
-    with col_sel:
-        selected_label = st.selectbox(
-            "选择职业查看详情",
-            options,
-            index=st.session_state.selected_role_idx or 0,
-            key="role_selector",
-        )
-        st.session_state.selected_role_idx = options.index(selected_label)
-    
+
+    selected_label = st.selectbox(
+        "选择职业查看详情", options,
+        index=st.session_state.selected_role_idx or 0,
+    )
+    st.session_state.selected_role_idx = options.index(selected_label)
     role = ranked[st.session_state.selected_role_idx]
-    
-    # 雷达图 + 信息
-    st.markdown(f"### {role['role_name']}")
-    
-    col_chart, col_info = st.columns([1, 1])
-    
-    # Compute per-dimension hits
+
+    # Find full role data
     role_full = None
     for r in st.session_state.get("all_roles", []):
         if r["role_name"] == role["role_name"]:
             role_full = r
             break
-    
+
+    st.markdown(f"### {role['role_name']}")
+
+    col_chart, col_info = st.columns([1, 1])
+
+    # Radar chart
     if role_full:
-        dim_hits = compute_dimension_hits(st.session_state.resume_data.get("five_dim", {}), role_full.get("skills", []))
+        dim_hits = compute_dimension_hits(st.session_state.raw_text, role_full.get("skills", []))
     else:
         dim_hits = {}
-    
+
     with col_chart:
-        dims = []
+        dim_labels_chart = []
         values = []
-        for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
+        for dim in DIM_ORDER:
             d = dim_hits.get(dim)
-            dims.append(DIM_LABELS.get(dim, dim))
+            dim_labels_chart.append(DIM_LABELS.get(dim, dim))
             values.append(d["coverage"] if d else 0.0)
 
-        angles = np.linspace(0, 2 * np.pi, len(dims), endpoint=False).tolist()
+        angles = np.linspace(0, 2 * np.pi, len(DIM_ORDER), endpoint=False).tolist()
         vals_plot = values + values[:1]
         angles_plot = angles + angles[:1]
 
         fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-        ax.fill(angles_plot, vals_plot, alpha=0.25, color='#1f77b4')
-        ax.plot(angles_plot, vals_plot, color='#1f77b4', linewidth=2)
+        ax.fill(angles_plot, vals_plot, alpha=0.25, color="#1f77b4")
+        ax.plot(angles_plot, vals_plot, color="#1f77b4", linewidth=2)
         ax.set_xticks(angles)
-        ax.set_xticklabels(dims, fontsize=10)
+        ax.set_xticklabels(dim_labels_chart, fontsize=9)
         ax.set_ylim(0, 1)
         ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-        ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=7)
-        ax.set_title(role['role_name'], fontsize=11, pad=15)
+        ax.set_yticklabels(["25%", "50%", "75%", "100%"], fontsize=7)
+        ax.set_title(role["role_name"], fontsize=11, pad=15)
         st.pyplot(fig)
 
-    # Show per-dimension hit/miss details
+    with col_info:
+        st.metric("匹配得分", f"{role['score']:.2%}")
+        st.metric("命中技能", f"{role.get('hit_skills', 0)}/{role.get('total_skills', 0)}")
+
+    # Hit/miss details
     if dim_hits:
-        st.subheader("六维命中明细")
-        cols = st.columns(3)
-        for i, dim in enumerate(("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept")):
+        st.subheader("技能命中明细")
+        cols = st.columns(4)
+        for i, dim in enumerate(DIM_ORDER):
             d = dim_hits.get(dim)
             if not d:
                 continue
-            with cols[i % 3]:
+            with cols[i % 4]:
                 label = DIM_LABELS.get(dim, dim)
                 cov = d["coverage"]
                 color = "green" if cov >= 0.8 else ("orange" if cov >= 0.4 else "red")
@@ -287,87 +228,95 @@ if st.session_state.ranked_roles:
                     with st.expander(f"已命中 ({len(d['hit'])})"):
                         for h in d["hit"]:
                             st.write(f"✅ {h}")
-    
-    with col_info:
-        st.metric("匹配得分", f"{role['score']:.4f}")
-        st.metric("命中技能", f"{role.get('hit_skills', 0)}/{role.get('total_skills', 0)}")
-        st.caption(f"家族: {role.get('family_name', '?')}")
-        st.caption(f"领域: {role.get('domain_name', '?')}")
-        st.caption(f"旗下 JD 数: {role.get('jd_count', 0)}")
-    
+
+    # Highlighted markdown
+    if role_full:
+        full_result = None
+        for r in st.session_state.get("all_roles", []):
+            if r["role_name"] == role["role_name"]:
+                from src.retrieval.scoring import match_skills_in_text
+                full_result = match_skills_in_text(st.session_state.raw_text, r.get("skills", []))
+                break
+
+        if full_result:
+            st.subheader("🔍 简历原文匹配高亮")
+            highlighted = highlight_text(st.session_state.raw_text, full_result["hit"])
+            # Truncate for display
+            max_display = 5000
+            display_text = highlighted[:max_display]
+            if len(highlighted) > max_display:
+                display_text += "\n\n... (共 " + str(len(st.session_state.raw_text)) + " 字符，仅显示前 " + str(max_display) + ")"
+            st.markdown(display_text, unsafe_allow_html=True)
+
     st.divider()
-    
-    # LLM 差距分析
-    st.subheader("🤖 LLM 差距分析")
-    
+
+    # ==================== Step 5: LLM Analysis ====================
+    st.subheader("🤖 LLM 分析")
+
     if st.button("生成匹配分析和学习路径", type="primary"):
         try:
-            with st.spinner(f"正在分析 {role['role_name']} 匹配度..."):
-                role_full = None
-                for r in st.session_state.get("all_roles", []):
-                    if r["role_name"] == role["role_name"]:
-                        role_full = r
-                        break
-                
-                if not role_full:
-                    st.error("找不到该 Role 的技能数据")
-                else:
-                    result = run_role_analysis(st.session_state.resume_data, role_full)
-                    st.session_state.analysis_result = result
-                    st.success("分析完成")
+            with st.spinner("LLM 分析中..."):
+                # Build dimension details for prompt
+                parts = []
+                for dim in DIM_ORDER:
+                    d = dim_hits.get(dim)
+                    if not d:
+                        continue
+                    label = DIM_LABELS.get(dim, dim)
+                    hit_str = ", ".join(d["hit"][:8]) if d["hit"] else "(none)"
+                    miss_str = ", ".join(d["miss"][:8]) if d["miss"] else "(none)"
+                    parts.append(
+                        f"**{label}** ({d['hit_count']}/{d['total']}):\n"
+                        f"  Hit: {hit_str}\n"
+                        f"  Miss: {miss_str}"
+                    )
+
+                prompt = ROLE_GAP_PROMPT.format(
+                    role_name=role_full.get("role_name", ""),
+                    family_name=role_full.get("family_name", ""),
+                    domain_name=role_full.get("domain_name", ""),
+                    dimension_details="\n\n".join(parts),
+                    resume_raw_text=st.session_state.raw_text[:1500],
+                )
+                result = call_deepseek_json(prompt)
+                st.session_state.analysis_result = result
+                st.success("分析完成")
             st.rerun()
         except Exception as e:
             st.error(f"LLM 分析失败: {e}")
 
-# ==================== Step 5: LLM 分析结果 ====================
-
+# ==================== Step 6: LLM Result ====================
 if st.session_state.analysis_result:
     result = st.session_state.analysis_result
-    
-    st.header("📋 差距分析结果")
-    
+    st.header("📋 分析结果")
+
     match = result.get("match", {})
     verdict = match.get("verdict", "")
-    verdict_icon = "✅" if verdict == "yes" else "❌"
-    st.markdown(f"### {verdict_icon} 结论: {'匹配' if verdict == 'yes' else '不匹配'}")
+    icon = "✅" if verdict == "yes" else "❌"
+    st.markdown(f"### {icon} 结论: {'匹配' if verdict == 'yes' else '不匹配'}")
     if match.get("reason"):
         st.info(match["reason"])
     if result.get("overall_summary"):
         st.write(result["overall_summary"])
-    
-    # 六维差距
+
     dimensions = result.get("dimensions", {})
-    dim_labels = {"knowledge": "知识", "skill": "技术", "qualifications": "任职条件",
-                  "motivation": "动机", "trait": "特质", "self_concept": "自我概念"}
-    gap_icons = {"missing": "🔴", "partial": "🟡", "sufficient": "🟢"}
-    
-    for dim in ["knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"]:
+    gap_icons = {"missing": "red", "partial": "orange", "sufficient": "green"}
+    for dim in DIM_ORDER:
         d = dimensions.get(dim, {})
         if not d:
             continue
         gap = d.get("gap_level", "?")
-        icon = gap_icons.get(gap, "⚪")
-        with st.expander(f"{icon} {dim_labels[dim]} — {gap}", expanded=(gap != "sufficient")):
+        label = DIM_LABELS.get(dim, dim)
+        with st.expander(f":{gap_icons.get(gap, 'gray')}[{label} — {gap}]", expanded=(gap != "sufficient")):
             st.caption(d.get("summary", ""))
-            for key, label in [("missing", "缺失/不足"), ("satisfied", "已满足")]:
-                items = d.get(key, [])
-                if items:
-                    st.write(f"**{label}:**")
-                    for item in items:
-                        st.write(f"• {item}")
-    
-    # 学习路径
+
     learning_path = result.get("learning_path", [])
     if learning_path:
         st.subheader("📚 学习路径")
         for step in learning_path:
             imp = step.get("importance", "?")
             icon = {"high": "🔴", "medium": "🟡"}.get(imp, "⚪")
-            st.write(f"{icon} **{step.get('step', '?')}.** {step.get('skill', '?')} `[{imp}]`")
-    
-    if st.button("🔄 重新分析"):
-        st.session_state.analysis_result = None
-        st.rerun()
+            st.write(f"{icon} **{step.get('step', '?')}.** {step.get('skill', '?')} [{imp}]")
 
 st.divider()
-st.caption("简历提取分析 Agent | Neo4j + DeepSeek | LangGraph + Streamlit")
+st.caption("简历职位匹配分析 | Neo4j + DeepSeek + Streamlit")

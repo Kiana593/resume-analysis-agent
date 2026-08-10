@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from dotenv import load_dotenv
 
-from src.retrieval.scoring import _item_match, CATEGORY_TO_DIM
+from src.retrieval.scoring import _item_match, CATEGORY_TO_DIM, match_skills_in_text
 
 load_dotenv()
 
@@ -109,73 +109,44 @@ CORE_SKILL_PENALTY_K = 10
 
 
 def rank_roles(
-    candidate_five_dim: Dict[str, Any],
+    raw_text: str,
     roles: Sequence[Dict[str, Any]],
     topk: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """简历 vs 全部 Role 的权重覆盖率粗排。
+    """简历原文 vs 全部 Role 的核心技能覆盖率粗排。
 
-    公式：Role 得分 = Σ(命中核心技能 × weight) / Σ(全部核心技能 weight)
-                    × min(1, 核心技能数 / CORE_SKILL_PENALTY_K)
-    - 命中：简历六维条目通过 _item_match 覆盖技能名
-    - 技能 category → 六维维度映射（CATEGORY_TO_DIM）
-    - 未命中任何技能的 Role 得 0 分
-    - 少技能惩罚：核心技能挂载不全（如"半导体工程师"仅 4 个通用技能）的 Role，
-      因分母过小导致覆盖率虚高。对技能数 < CORE_SKILL_PENALTY_K 的 Role 按
-      min(1, n/K) 打折，技能数 ≥ K 的 Role 不受影响。
+    直接在简历原文（Markdown）中做归一化子串搜索，
+    不再依赖六维提取结果。
 
     Args:
-        candidate_five_dim: 简历六维画像。
+        raw_text: 简历 Markdown 原文。
         roles: load_roles_from_neo4j() 的返回。
         topk: 只返回前 N 名（None/<=0 返回全部）。
-
-    Returns:
-        按得分降序：
-        {
-            "role_name": str, "family_name": str, "domain_name": str,
-            "jd_count": int, "score": float,
-            "hit_skills": int, "total_skills": int,
-        }
     """
-    # 1. 按技能跨 Role 稀有度（IDF）重新加权：
-    #    通用技能（如"本科及以上学历""沟通能力"出现在几乎所有 Role）权重压低，
-    #    稀有技能（如"需求分析""机器学习"仅少数职业特有）权重保留。
     roles = _apply_idf(roles)
 
     scored: List[Dict[str, Any]] = []
     for role in roles:
-        # 过滤空壳 Role（旗下无 JD 或未挂载核心技能）
         if role.get("jd_count", 0) <= 0:
             continue
         skills = [s for s in role.get("skills", []) if s.get("name")]
         if not skills:
             continue
 
-        total_weight = sum(s["weight"] for s in skills)
-        if total_weight <= 0:
-            continue
+        result = match_skills_in_text(raw_text, skills)
 
-        hit_weight = 0.0
-        hit_count = 0
-        for skill in skills:
-            dim = CATEGORY_TO_DIM.get(skill.get("category", ""))
-            candidate_items = candidate_five_dim.get(dim, []) if dim else []
-            if any(_item_match(c, skill["name"]) for c in candidate_items):
-                hit_weight += skill["weight"]
-                hit_count += 1
-
-        # 少技能惩罚：核心技能数不足 K 的 Role，按 n/K 打折覆盖率（防止分母过小虚高）
-        coverage = hit_weight / total_weight
         n_skills = len(skills)
         penalty = min(1.0, n_skills / CORE_SKILL_PENALTY_K)
+        score = round((result["hit_count"] / max(n_skills, 1)) * penalty, 4)
+
         scored.append(
             {
                 "role_name": role.get("role_name", ""),
                 "family_name": role.get("family_name", ""),
                 "domain_name": role.get("domain_name", ""),
                 "jd_count": role.get("jd_count", 0),
-                "score": round(coverage * penalty, 4),
-                "hit_skills": hit_count,
+                "score": score,
+                "hit_skills": result["hit_count"],
                 "total_skills": n_skills,
             }
         )
@@ -192,6 +163,7 @@ DIM_LABELS = {
     "knowledge": "知识",
     "skill": "技术",
     "qualifications": "任职条件",
+    "preference": "招聘偏好",
     "motivation": "动机",
     "trait": "特质",
     "self_concept": "自我概念",

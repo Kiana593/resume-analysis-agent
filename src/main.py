@@ -207,15 +207,15 @@ def cmd_rank(args) -> int:
         resume_data = load_json(resume["resume_json"])
     else:
         resume_data = resume.get("resume_data") or {}
-    candidate = resume_data.get("five_dim", {})
-    if not candidate:
-        print("\n  [ERROR] 简历缺少 five_dim 六维数据\n")
+    raw_text = (resume_data or {}).get("raw_text", "")
+    if not raw_text:
+        print("\n  [ERROR] 简历缺少 raw_text（请先用 extract 提取）\n")
         return 1
 
     try:
         print("\n  [rank] 从 Neo4j 加载 Role 核心技能 ...")
         roles = load_roles_from_neo4j()
-        ranked_roles = rank_roles(candidate, roles, topk=args.topk)
+        ranked_roles = rank_roles(raw_text, roles, topk=args.topk)
         print(f"  [rank] {len(roles)} 个 Role，保留 Top {len(ranked_roles)}")
 
         _print_role_table(ranked_roles, title="Role 级别职位匹配排名（核心技能覆盖率）")

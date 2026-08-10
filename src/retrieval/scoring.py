@@ -27,6 +27,7 @@ DIMENSION_KEYS = (
     "knowledge",
     "skill",
     "qualifications",
+    "preference",
     "motivation",
     "trait",
     "self_concept",
@@ -37,7 +38,7 @@ CATEGORY_TO_DIM = {
     "知识": "knowledge",
     "技术": "skill",
     "任职条件": "qualifications",
-    "招聘偏好": "qualifications",
+    "招聘偏好": "preference",
     "动机": "motivation",
     "特质": "trait",
     "自我概念": "self_concept",
@@ -46,12 +47,13 @@ CATEGORY_TO_DIM = {
 # 默认权重：知识/技术/任职条件是硬性门槛（与 LLM 判定规则一致），权重高；
 # 动机/特质/自我概念为软性要求，权重低。可通过 weights 参数覆盖（内部自动归一化）。
 DEFAULT_WEIGHTS: Dict[str, float] = {
-    "knowledge": 0.25,
-    "skill": 0.25,
-    "qualifications": 0.20,
+    "knowledge": 0.22,
+    "skill": 0.22,
+    "qualifications": 0.18,
+    "preference": 0.10,
     "motivation": 0.10,
-    "trait": 0.10,
-    "self_concept": 0.10,
+    "trait": 0.09,
+    "self_concept": 0.09,
 }
 
 # JD 层少条目惩罚阈值：JD 六维要求条目总数少于该值时，
@@ -75,6 +77,65 @@ _GENERIC_WINDOW_WORDS = (
 
 # 学历等级（用于任职条件特判：等级比较而非词法匹配）
 _DEGREE_LEVELS = {"博士": 3, "硕士": 2, "研究生": 2, "本科": 1, "学士": 1, "大专": 0, "专科": 0}
+
+
+# ==================== 原文技能命中搜索 ====================
+
+def match_skills_in_text(raw_text, skills):
+    """在简历原文中搜索 Role 技能命中（归一化子串匹配）。
+
+    Args:
+        raw_text: 简历 Markdown 原文
+        skills: Role 技能列表 [{name, category, weight, rank}, ...]
+
+    Returns:
+        {"hit": [...], "miss": [...], "hit_count": N, "total": M,
+         "by_dim": {dim: {"hit": [...], "miss": [...], "hit_count": N, "total": M}}}
+    """
+    norm_text = _normalize(raw_text)
+    hits = []
+    misses = []
+    by_dim = {}
+
+    for sk in skills:
+        name = sk.get("name", "").strip()
+        if not name:
+            continue
+        dim = CATEGORY_TO_DIM.get(sk.get("category", ""))
+        if not dim:
+            continue
+        by_dim.setdefault(dim, {"hit": [], "miss": [], "hit_count": 0, "total": 0})
+
+        norm_name = _normalize(name)
+        matched = norm_name in norm_text if len(norm_name) >= 2 else False
+
+        # 找到原文中的位置（用于高亮）
+        positions = []
+        if matched:
+            start = 0
+            while True:
+                idx = raw_text.lower().find(name.lower(), start)
+                if idx == -1:
+                    break
+                positions.append((idx, idx + len(name)))
+                start = idx + 1
+
+        entry = {"name": name, "category": sk.get("category", ""), "dim": dim}
+        if matched:
+            entry["positions"] = positions
+            hits.append(entry)
+            by_dim[dim]["hit"].append(entry)
+            by_dim[dim]["hit_count"] += 1
+        else:
+            misses.append(entry)
+            by_dim[dim]["miss"].append(entry)
+        by_dim[dim]["total"] += 1
+
+    return {
+        "hit": hits, "miss": misses,
+        "hit_count": len(hits), "total": len(skills),
+        "by_dim": by_dim,
+    }
 
 
 def _normalize(text: str) -> str:
