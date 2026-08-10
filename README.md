@@ -47,6 +47,7 @@ python mcp_server.py --transport sse
 ```bash
 python src/main.py rank -r 简历.pdf --topk 10
 python src/main.py enhance -r rank_result.json --resume 简历.pdf --topk 20
+python src/main.py enhance -r rank_result.json --resume 简历.pdf --topk 20 --analyze   # 复核后自动对第 1 名做差距分析
 python src/main.py analyze -r role.json --resume 简历.pdf
 python src/main.py --store neo4j rank -r 简历.pdf
 ```

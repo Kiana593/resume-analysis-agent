@@ -46,6 +46,10 @@ def cmd_enhance(args) -> int:
     rank_result = _load_json(args.rank_result)
     resume_text = _read_resume(args.resume)
     result = enhance_matches(rank_result, resume_text, topk=args.topk)
+    if args.analyze and result.get("results"):
+        # 用复核后的第 1 名做差距分析，保证两阶段数据一致
+        gap = analyze_gap(result["results"][0], resume_text)
+        result = {"enhanced": result, "gap_analysis": gap}
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -79,6 +83,11 @@ def main() -> None:
     p_enhance.add_argument("-r", "--rank-result", required=True, help="rank 结果 JSON 文件")
     p_enhance.add_argument("--resume", required=True, help="简历文件（PDF/DOCX/MD/TXT）")
     p_enhance.add_argument("--topk", type=int, default=20, help="复核前 N 名（默认 20）")
+    p_enhance.add_argument(
+        "--analyze",
+        action="store_true",
+        help="复核后自动对第 1 名做差距分析（enhance → analyze 一步完成）",
+    )
 
     p_analyze = subparsers.add_parser("analyze", help="单 Role 差距分析 + 学习路径")
     p_analyze.add_argument("-r", "--role", required=True, help="单个 role JSON 文件")
