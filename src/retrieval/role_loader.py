@@ -186,6 +186,51 @@ def rank_roles(
     return scored
 
 
+# ==================== dimension hit details ====================
+
+DIM_LABELS = {
+    "knowledge": "知识",
+    "skill": "技术",
+    "qualifications": "任职条件",
+    "motivation": "动机",
+    "trait": "特质",
+    "self_concept": "自我概念",
+}
+
+
+def compute_dimension_hits(candidate_five_dim, role_skills):
+    dim_skills = {}
+    for sk in role_skills:
+        name = sk.get("name", "").strip()
+        if not name:
+            continue
+        dim = CATEGORY_TO_DIM.get(sk.get("category", ""))
+        if dim:
+            dim_skills.setdefault(dim, []).append(sk)
+
+    result = {}
+    for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
+        skills = dim_skills.get(dim, [])
+        if not skills:
+            continue
+        candidate_items = candidate_five_dim.get(dim, [])
+        hit = []
+        miss = []
+        for sk in sorted(skills, key=lambda s: s.get("rank", 9999)):
+            name = sk["name"]
+            matched = any(_item_match(c, name) for c in candidate_items)
+            (hit if matched else miss).append(name)
+        result[dim] = {
+            "hit": hit,
+            "miss": miss,
+            "coverage": round(len(hit) / len(skills), 4) if skills else 1.0,
+            "total": len(skills),
+            "hit_count": len(hit),
+            "miss_count": len(miss),
+        }
+    return result
+
+
 def _apply_idf(roles: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按技能的跨 Role 稀有度重新加权（IDF 思想）。
 

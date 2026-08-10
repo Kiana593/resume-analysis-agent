@@ -19,9 +19,11 @@ os.chdir(str(PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.graph import extract_graph, analysis_graph
-from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles
+from src.graph import extract_graph
+from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles, compute_dimension_hits, DIM_LABELS
 from src.main import load_extraction_schema
+from src.prompts.gap_analysis import ROLE_GAP_PROMPT
+from src.utils.llm import call_deepseek_json
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
@@ -57,17 +59,37 @@ def run_extract_graph(file_path, mode):
         raise RuntimeError(merged["error"])
     return merged.get("resume_data", {})
 
-def run_analysis_graph(resume_data, jd_data):
-    """运行分析图（差距分析 + 学习路径）。"""
-    initial = {"resume_data": resume_data, "jd_data": jd_data}
-    merged = dict(initial)
-    for step_output in analysis_graph.stream(initial):
-        for node_name, partial in step_output.items():
-            if partial:
-                merged.update(partial)
-    if merged.get("error"):
-        raise RuntimeError(merged["error"])
-    return merged.get("analysis_result", {})
+def run_role_analysis(resume_data, role_full):
+    """用精简 prompt 做 Role 级别差距分析（非图流程，直接 LLM 调用）。"""
+    candidate = resume_data.get("five_dim", {})
+    skills = role_full.get("skills", [])
+    hits = compute_dimension_hits(candidate, skills)
+
+    # 构建维度明细文本
+    parts = []
+    for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
+        d = hits.get(dim)
+        if not d:
+            continue
+        label = DIM_LABELS.get(dim, dim)
+        hit_str = ", ".join(d["hit"][:8]) if d["hit"] else "(none)"
+        miss_str = ", ".join(d["miss"][:8]) if d["miss"] else "(none)"
+        parts.append(
+            f"**{label}** ({d['hit_count']}/{d['total']} hit):\n"
+            f"  Hit: {hit_str}\n"
+            f"  Miss: {miss_str}"
+        )
+
+    prompt = ROLE_GAP_PROMPT.format(
+        role_name=role_full.get("role_name", ""),
+        family_name=role_full.get("family_name", ""),
+        domain_name=role_full.get("domain_name", ""),
+        dimension_details="\n\n".join(parts),
+        resume_raw_text=resume_data.get("raw_text", "")[:1500],
+    )
+
+    result = call_deepseek_json(prompt)
+    return result
 
 # ==================== Session State ====================
 for key in ["resume_data", "ranked_roles", "selected_role_idx", "analysis_result", "extracted_file", "all_roles"]:
@@ -209,25 +231,62 @@ if st.session_state.ranked_roles:
     
     col_chart, col_info = st.columns([1, 1])
     
+    # Compute per-dimension hits
+    role_full = None
+    for r in st.session_state.get("all_roles", []):
+        if r["role_name"] == role["role_name"]:
+            role_full = r
+            break
+    
+    if role_full:
+        dim_hits = compute_dimension_hits(st.session_state.resume_data.get("five_dim", {}), role_full.get("skills", []))
+    else:
+        dim_hits = {}
+    
     with col_chart:
-        dims = ["知识", "技术", "任职", "动机", "特质", "自我"]
-        coverage = role.get("hit_skills", 0) / max(role.get("total_skills", 1), 1)
-        values = [coverage] * 6
+        dims = []
+        values = []
+        for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
+            d = dim_hits.get(dim)
+            dims.append(DIM_LABELS.get(dim, dim))
+            values.append(d["coverage"] if d else 0.0)
 
         angles = np.linspace(0, 2 * np.pi, len(dims), endpoint=False).tolist()
-        values += values[:1]
-        angles += angles[:1]
+        vals_plot = values + values[:1]
+        angles_plot = angles + angles[:1]
 
         fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-        ax.fill(angles, values, alpha=0.25, color='#1f77b4')
-        ax.plot(angles, values, color='#1f77b4', linewidth=2)
-        ax.set_xticks(angles[:-1])
+        ax.fill(angles_plot, vals_plot, alpha=0.25, color='#1f77b4')
+        ax.plot(angles_plot, vals_plot, color='#1f77b4', linewidth=2)
+        ax.set_xticks(angles)
         ax.set_xticklabels(dims, fontsize=10)
         ax.set_ylim(0, 1)
         ax.set_yticks([0.25, 0.5, 0.75, 1.0])
         ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=7)
         ax.set_title(role['role_name'], fontsize=11, pad=15)
         st.pyplot(fig)
+
+    # Show per-dimension hit/miss details
+    if dim_hits:
+        st.subheader("六维命中明细")
+        cols = st.columns(3)
+        for i, dim in enumerate(("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept")):
+            d = dim_hits.get(dim)
+            if not d:
+                continue
+            with cols[i % 3]:
+                label = DIM_LABELS.get(dim, dim)
+                cov = d["coverage"]
+                color = "green" if cov >= 0.8 else ("orange" if cov >= 0.4 else "red")
+                st.markdown(f"**{label}** :{color}[{d['hit_count']}/{d['total']} = {cov:.0%}]")
+                if d["miss"]:
+                    with st.expander(f"未命中 ({len(d['miss'])})"):
+                        for m in d["miss"]:
+                            st.write(f"❌ {m}")
+                if d["hit"]:
+                    with st.expander(f"已命中 ({len(d['hit'])})"):
+                        for h in d["hit"]:
+                            st.write(f"✅ {h}")
     
     with col_info:
         st.metric("匹配得分", f"{role['score']:.4f}")
@@ -243,8 +302,7 @@ if st.session_state.ranked_roles:
     
     if st.button("生成匹配分析和学习路径", type="primary"):
         try:
-            with st.spinner(f"正在对比 {role['role_name']} 的全部技能要求..."):
-                # 从 all_roles 找到该 Role 的完整技能数据
+            with st.spinner(f"正在分析 {role['role_name']} 匹配度..."):
                 role_full = None
                 for r in st.session_state.get("all_roles", []):
                     if r["role_name"] == role["role_name"]:
@@ -254,34 +312,9 @@ if st.session_state.ranked_roles:
                 if not role_full:
                     st.error("找不到该 Role 的技能数据")
                 else:
-                    # 用 Role 全部技能构建合成 JD
-                    from src.retrieval.scoring import CATEGORY_TO_DIM
-                    skills = role_full.get("skills", [])
-                    five_dim = {
-                        "knowledge": [], "skill": [], "qualifications": [],
-                        "motivation": [], "trait": [], "self_concept": [],
-                    }
-                    for sk in skills:
-                        dim = CATEGORY_TO_DIM.get(sk.get("category", ""))
-                        name = sk.get("name", "").strip()
-                        if dim and name and name not in five_dim[dim]:
-                            five_dim[dim].append(name)
-                    
-                    skill_lines = []
-                    for sk in skills[:30]:
-                        cat = sk.get("category", "?")
-                        name = sk.get("name", "")
-                        skill_lines.append(f"[{cat}] {name}")
-                    
-                    synthetic_jd = {
-                        "job_title": role["role_name"],
-                        "five_dim": five_dim,
-                        "raw_text": f"标准职业: {role['role_name']}\n家族: {role.get('family_name', '')}\n领域: {role.get('domain_name', '')}\n\n核心技能要求:\n" + "\n".join(skill_lines),
-                    }
-                    
-                    st.info(f"对比 {role['role_name']} — {len(skills)} 项核心技能（六维覆盖: { {k: len(v) for k, v in five_dim.items() if v} }）")
-                    result = run_analysis_graph(st.session_state.resume_data, synthetic_jd)
+                    result = run_role_analysis(st.session_state.resume_data, role_full)
                     st.session_state.analysis_result = result
+                    st.success("分析完成")
             st.rerun()
         except Exception as e:
             st.error(f"LLM 分析失败: {e}")

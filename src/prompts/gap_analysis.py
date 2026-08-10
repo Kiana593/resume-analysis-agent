@@ -110,3 +110,40 @@ LEARNING_PATH_PROMPT = """你是一位职业学习规划专家。请基于以下
   ]
 }}
 """
+
+
+# ==================== Role gap analysis (streamlined: pre-computed hits) ====================
+
+ROLE_GAP_PROMPT = """You are a career advisor. Below is the skill match between a candidate and a target role.
+
+## Target Role
+{role_name} (family: {family_name} / domain: {domain_name})
+
+## Pre-computed Match Details
+{dimension_details}
+
+## Resume (context only)
+{resume_raw_text}
+
+## Task
+1. Judge match level for each dimension (missing / partial / sufficient).
+2. Generate a learning path (max 8 steps) for missed skills only.
+3. Output overall advice.
+
+## Output (JSON only)
+{{
+  "match": {{"verdict": "yes|no", "reason": "one sentence"}},
+  "dimensions": {{
+    "knowledge":      {{"gap_level": "missing|partial|sufficient", "summary": ""}},
+    "skill":          {{"gap_level": "missing|partial|sufficient", "summary": ""}},
+    "qualifications": {{"gap_level": "missing|partial|sufficient", "summary": ""}},
+    "motivation":     {{"gap_level": "missing|partial|sufficient", "summary": ""}},
+    "trait":          {{"gap_level": "missing|partial|sufficient", "summary": ""}},
+    "self_concept":   {{"gap_level": "missing|partial|sufficient", "summary": ""}}
+  }},
+  "overall_summary": "",
+  "learning_path": [
+    {{"step": 1, "skill": "skill/topic", "importance": "high|medium"}}
+  ]
+}}
+"""
