@@ -23,7 +23,7 @@ _CSV_DIM_ALIASES = {
     "知识": "knowledge",
     "技术": "skill",
     "任职条件": "qualifications",
-    "招聘偏好": "qualifications",
+    "招聘偏好": "preference",
     "动机": "motivation",
     "特质": "trait",
     "自我概念": "self_concept",

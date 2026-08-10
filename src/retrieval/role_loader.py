@@ -170,39 +170,27 @@ DIM_LABELS = {
 }
 
 
-def compute_dimension_hits(candidate_five_dim, role_skills):
-    dim_skills = {}
-    for sk in role_skills:
-        name = sk.get("name", "").strip()
-        if not name:
-            continue
-        dim = CATEGORY_TO_DIM.get(sk.get("category", ""))
-        if dim:
-            dim_skills.setdefault(dim, []).append(sk)
+def compute_dimension_hits(raw_text, role_skills):
+    """按七维统计简历原文对 Role 技能的命中/未命中明细。
 
+    Returns:
+        {"knowledge": {"hit": [...], "miss": [...], "coverage": 0.67, "total": 3}, ...}
+    """
+    full = match_skills_in_text(raw_text, role_skills)
     result = {}
-    for dim in ("knowledge", "skill", "qualifications", "motivation", "trait", "self_concept"):
-        skills = dim_skills.get(dim, [])
-        if not skills:
-            continue
-        candidate_items = candidate_five_dim.get(dim, [])
-        hit = []
-        miss = []
-        for sk in sorted(skills, key=lambda s: s.get("rank", 9999)):
-            name = sk["name"]
-            matched = any(_item_match(c, name) for c in candidate_items)
-            (hit if matched else miss).append(name)
+    for dim, bd in full.get("by_dim", {}).items():
+        names_hit = [e["name"] for e in bd.get("hit", [])]
+        names_miss = [e["name"] for e in bd.get("miss", [])]
+        total = bd["total"]
         result[dim] = {
-            "hit": hit,
-            "miss": miss,
-            "coverage": round(len(hit) / len(skills), 4) if skills else 1.0,
-            "total": len(skills),
-            "hit_count": len(hit),
-            "miss_count": len(miss),
+            "hit": names_hit,
+            "miss": names_miss,
+            "coverage": round(bd["hit_count"] / max(total, 1), 4),
+            "total": total,
+            "hit_count": bd["hit_count"],
+            "miss_count": len(names_miss),
         }
     return result
-
-
 def _apply_idf(roles: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按技能的跨 Role 稀有度重新加权（IDF 思想）。
 

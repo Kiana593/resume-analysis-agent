@@ -1,4 +1,4 @@
-"""简历提取分析 Web 前端（轻量化版）。
+﻿"""简历提取分析 Web 前端（轻量化版）。
 
 流程：上传简历 → markitdown 转 Markdown → 原文命中搜索 → Role 排名 → 雷达图 + 高亮 → LLM 建议。
 运行: streamlit run app.py
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.retrieval.role_loader import load_roles_from_neo4j, rank_roles, compute_dimension_hits, DIM_LABELS
+from src.retrieval.scoring import match_skills_in_text
 from src.prompts.gap_analysis import ROLE_GAP_PROMPT
 from src.utils.llm import call_deepseek_json
 
@@ -156,6 +157,104 @@ if st.session_state.ranked_roles:
         for i, r in enumerate(ranked, 1)
     ]
 
+    # ===== Global LLM Enhancement =====
+    st.divider()
+    st.subheader(":mag: LLM 全局增强验证")
+    st.caption("收集 Top-20 职业的未命中技能（去重），一次 LLM 调用验证，重排")
+
+    col_e1, col_e2 = st.columns([2, 1])
+    with col_e2:
+        do_enhance = st.button("🤖 LLM 增强验证 Top-20", type="secondary")
+
+    if do_enhance:
+        all_missed = {}
+        for role in st.session_state.ranked_roles:
+            role_full2 = None
+            for rr in st.session_state.get("all_roles", []):
+                if rr["role_name"] == role["role_name"]:
+                    role_full2 = rr
+                    break
+            if not role_full2:
+                continue
+            from src.retrieval.scoring import match_skills_in_text
+            result = match_skills_in_text(st.session_state.raw_text, role_full2.get("skills", []))
+            for m in result["miss"]:
+                name = m["name"]
+                if name not in all_missed:
+                    all_missed[name] = m
+
+        if not all_missed:
+            st.info("没有未命中技能需要验证")
+        else:
+            miss_list = list(all_missed.keys())
+            with st.spinner(f"LLM verifying {len(miss_list)} unique missed skills..."):
+                miss_items = "\n".join(f"{i+1}. {n}" for i, n in enumerate(miss_list))
+                vlines = []
+                vlines.append("You are a resume skill verifier.")
+                vlines.append("Check each skill below against the resume.")
+                vlines.append("If present (different wording OK, e.g. K8s=Kubernetes), mark true.")
+                vlines.append("")
+                vlines.append("## Resume")
+                vlines.append(st.session_state.raw_text[:4000])
+                vlines.append("")
+                vlines.append("## Skills to verify")
+                vlines.append(miss_items)
+                vlines.append("")
+                vlines.append("## Output (JSON only, no extra text)")
+                vlines.append('{"verified_skills": ["exact skill name 1", "exact skill name 2"]}')
+                verify_prompt = "\n".join(vlines)
+
+                try:
+                    llm_result = call_deepseek_json(verify_prompt)
+                    verified_list = llm_result.get("verified_skills", [])
+                    st.session_state.global_verified = set()
+                    for name in verified_list:
+                        name = name.strip()
+                        if name in all_missed:
+                            st.session_state.global_verified.add(name)
+                    vcnt = len(st.session_state.global_verified)
+                    st.success(f"LLM 确认 {vcnt}/{len(miss_list)} 项未命中为实际命中")
+
+                    # Re-rank Top-20
+                    enhanced = []
+                    for role in st.session_state.ranked_roles:
+                        rf = None
+                        for rr in st.session_state.get("all_roles", []):
+                            if rr["role_name"] == role["role_name"]:
+                                rf = rr
+                                break
+                        if not rf:
+                            enhanced.append(role)
+                            continue
+                        skills = rf.get("skills", [])
+                        gv = st.session_state.global_verified
+                        extra = sum(1 for sk in skills if sk.get("name","").strip() in gv)
+                        total = role.get("total_skills", 1)
+                        nh = role.get("hit_skills", 0) + extra
+                        ns = round(nh / max(total, 1) * min(1.0, total / 10), 4)
+                        nr = dict(role)
+                        nr["hit_skills"] = nh
+                        nr["score"] = ns
+                        nr["_enhanced"] = True
+                        nr["_extra_hits"] = extra
+                        enhanced.append(nr)
+                    enhanced.sort(key=lambda x: x["score"], reverse=True)
+                    st.session_state.ranked_roles = enhanced
+                    st.session_state.selected_role_idx = 0
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"LLM enhancement failed: {e}")
+
+    if st.session_state.get("global_verified"):
+        gv = st.session_state.global_verified
+        if gv:
+            st.caption(f":white_check_mark: {len(gv)} 项 LLM 确认命中")
+            with st.expander("查看已确认技能"):
+                for name in sorted(gv):
+                    st.write(f":white_check_mark: {name}")
+
+    st.divider()
+
     selected_label = st.selectbox(
         "选择职业查看详情", options,
         index=st.session_state.selected_role_idx or 0,
@@ -179,6 +278,22 @@ if st.session_state.ranked_roles:
         dim_hits = compute_dimension_hits(st.session_state.raw_text, role_full.get("skills", []))
     else:
         dim_hits = {}
+
+    # Apply LLM verification to dim_hits
+    verified_set = st.session_state.get("global_verified", set())
+    if verified_set:
+        for dim in DIM_ORDER:
+            d = dim_hits.get(dim)
+            if not d:
+                continue
+            newly_hit = [m for m in d["miss"] if m in verified_set]
+            if newly_hit:
+                for v in newly_hit:
+                    d["miss"].remove(v)
+                    d["hit"].append(v)
+                d["hit_count"] = len(d["hit"])
+                d["miss_count"] = len(d["miss"])
+                d["coverage"] = round(d["hit_count"] / max(d["total"], 1), 4)
 
     with col_chart:
         dim_labels_chart = []
@@ -208,15 +323,13 @@ if st.session_state.ranked_roles:
         st.metric("命中技能", f"{role.get('hit_skills', 0)}/{role.get('total_skills', 0)}")
 
     # Hit/miss details
-    if dim_hits:
-        st.subheader("技能命中明细")
-        cols = st.columns(4)
-        for i, dim in enumerate(DIM_ORDER):
-            d = dim_hits.get(dim)
-            if not d:
-                continue
-            with cols[i % 4]:
-                label = DIM_LABELS.get(dim, dim)
+    st.subheader("技能命中明细")
+    cols = st.columns(4)
+    for i, dim in enumerate(DIM_ORDER):
+        d = dim_hits.get(dim)
+        with cols[i % 4]:
+            label = DIM_LABELS.get(dim, dim)
+            if d:
                 cov = d["coverage"]
                 color = "green" if cov >= 0.8 else ("orange" if cov >= 0.4 else "red")
                 st.markdown(f"**{label}** :{color}[{d['hit_count']}/{d['total']} = {cov:.0%}]")
@@ -225,9 +338,18 @@ if st.session_state.ranked_roles:
                         for m in d["miss"]:
                             st.write(f"❌ {m}")
                 if d["hit"]:
-                    with st.expander(f"已命中 ({len(d['hit'])})"):
+                    with st.expander(f"✅ 已命中 ({len(d['hit'])})"):
                         for h in d["hit"]:
-                            st.write(f"✅ {h}")
+                            tag = "🧠 " if h in verified_set else ""
+                            st.write(f"✅ {tag}{h}")
+            else:
+                st.markdown(f"**{label}** :gray[0/0]")
+                st.caption("该职业无此维度技能")
+
+
+    # Show global LLM enhanced status for this role
+    if role.get("_enhanced"):
+        st.caption(f":brain: LLM增强: +{role.get("_extra_hits", 0)} 命中, 得分 {role["score"]:.2%}")
 
     # Highlighted markdown
     if role_full:
@@ -256,17 +378,19 @@ if st.session_state.ranked_roles:
     if st.button("生成匹配分析和学习路径", type="primary"):
         try:
             with st.spinner("LLM 分析中..."):
-                # Build dimension details for prompt
+                                # Build dimension details (dim_hits already includes LLM-verified hits)
                 parts = []
                 for dim in DIM_ORDER:
                     d = dim_hits.get(dim)
                     if not d:
                         continue
                     label = DIM_LABELS.get(dim, dim)
-                    hit_str = ", ".join(d["hit"][:8]) if d["hit"] else "(none)"
-                    miss_str = ", ".join(d["miss"][:8]) if d["miss"] else "(none)"
+                    hit_names = list(d["hit"]) if d["hit"] else []
+                    miss_names = list(d["miss"]) if d["miss"] else []
+                    hit_str = ", ".join(hit_names[:8]) if hit_names else "(none)"
+                    miss_str = ", ".join(miss_names[:8]) if miss_names else "(none)"
                     parts.append(
-                        f"**{label}** ({d['hit_count']}/{d['total']}):\n"
+                        f"**{label}** ({d["hit_count"]}/{d["total"]}):\n"
                         f"  Hit: {hit_str}\n"
                         f"  Miss: {miss_str}"
                     )
