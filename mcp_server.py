@@ -38,7 +38,7 @@ from src.tools.modify import prepare_resume_edit as _prepare_resume_edit
 from src.tools.modify import validate_resume_edit as _validate_resume_edit
 from src.tools.visualize import render_radar as _render_radar
 
-mcp = _ServerCls("简历岗位匹配分析", instructions="简历人岗匹配分析工具：关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 雷达图。MCP 模式不调用外部 LLM API，语义复核/差距分析/修改建议由调用方 Agent 用自己的大模型完成。")
+mcp = _ServerCls("resume-analysis", instructions="简历岗位匹配分析（resume-analysis）：关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 雷达图。MCP 模式不调用外部 LLM API，语义复核/差距分析/修改建议由调用方 Agent 用自己的大模型完成。")
 
 
 # ==================== 静态资源 ====================

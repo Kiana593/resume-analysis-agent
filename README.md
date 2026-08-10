@@ -1,6 +1,6 @@
 # 简历人岗匹配 MCP 工具套件
 
-基于关键词命中的简历-岗位匹配分析 **MCP Server**（工具名：简历岗位匹配分析）：`PDF/DOCX → Markdown → 关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 七维雷达图`。
+基于关键词命中的简历-岗位匹配分析 **MCP Server**（产品名：简历岗位匹配分析；MCP 注册名：resume-analysis）：`PDF/DOCX → Markdown → 关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 七维雷达图`。
 
 双模式：**MCP 模式**的语义复核 / 差距分析 / 简历修改由调用方 Agent 用自己的大模型完成，服务器不调用外部 LLM API；**CLI 模式**的 `enhance` / `analyze` / `modify` 直接调用 DeepSeek API。
 
@@ -52,12 +52,12 @@ python mcp_server.py --transport sse
 编辑 `C:\Users\Kianak901\.codex\config.toml`，在 `[mcp_servers]` 段后追加：
 
 ```toml
-[mcp_servers."简历岗位匹配分析"]
+[mcp_servers.resume-analysis]
 command = 'C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe'
 args = ['D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\mcp_server.py']
 startup_timeout_sec = 30
 
-[mcp_servers."简历岗位匹配分析".env]
+[mcp_servers.resume-analysis.env]
 STORE_BACKEND = "memory"
 ```
 
@@ -67,7 +67,7 @@ STORE_BACKEND = "memory"
 或使用 CLI 命令添加（效果相同）：
 
 ```powershell
-codex mcp add "简历岗位匹配分析" -- C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe "D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\mcp_server.py"
+codex mcp add resume-analysis -- C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe "D:\个人资料\26暑假科研项目\小挑\简历提取分析agent\mcp_server.py"
 ```
 
 ## CLI 用法（非 MCP 场景）

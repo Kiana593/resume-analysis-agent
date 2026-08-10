@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/mcp.json",
   "mcpServers": {
-    "简历岗位匹配分析": {
+    "resume-analysis": {
       "command": "C:\\Users\\Kianak901\\anaconda3\\envs\\pyw1\\python.exe",
       "args": ["D:\\个人资料\\26暑假科研项目\\小挑\\简历提取分析agent\\mcp_server.py"],
       "cwd": "D:\\个人资料\\26暑假科研项目\\小挑\\简历提取分析agent",
