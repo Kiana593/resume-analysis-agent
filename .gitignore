@@ -1,5 +1,7 @@
 # ===== 敏感信息 =====
 .env
+.env.bak
+.env.*
 
 # ===== Python =====
 __pycache__/

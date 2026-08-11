@@ -6,6 +6,12 @@
 
 支持 Claude Desktop、Codex、Cursor、Continue 等任意兼容 MCP 的 Agent 平台即插即用；无 MCP 环境时也可用 CLI 或直接调用 `src/tools/` 函数。
 
+## 维度口径
+
+**核心口径为 7 维**：`knowledge`（知识）/ `skill`（技术）/ `qualifications`（任职条件）/ `preference`（招聘偏好）/ `motivation`（动机）/ `trait`（特质）/ `self_concept`（自我概念），严格对齐 Neo4j 图谱 `NormalizedSkill.category`（见 `src/core/dimensions.py` 的 `CATEGORY_TO_DIM` / `DIM_TO_CATEGORY`）。
+
+挑战杯大纲的**"五分类"（知识/技术/动机/特质/自我概念）仅为原始数据/汇报口径**（如 `samples/faircv_fivedim/`、`jds/` 中的旧 `five_dim` 字段），不参与核心匹配。对外材料如需五分类，使用 `project_to_five_dim()` 做 7→5 投影（任职条件归入知识、招聘偏好归入动机）。
+
 ## 快速开始
 
 ```bash
@@ -87,19 +93,30 @@ python src/main.py --store neo4j rank -r 简历.pdf
 
 ## LLM 供应商切换
 
-CLI 通过 `src/utils/llm.py` 的统一适配器调用模型（OpenAI 兼容协议），支持多供应商：
+CLI 通过 `src/utils/llm.py` 的统一适配器调用模型（OpenAI 兼容协议），支持多供应商。
+配置采用**并列 Switch 模式**：每个供应商一个独立配置块 `{PROVIDER}_*`，`LLM_PROVIDER` 是切换键，互不干扰；
+不使用共享的 `LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_EXTRA_BODY`。
 
 ```ini
-LLM_PROVIDER=iflytek          # deepseek | iflytek | openai | custom
-LLM_API_KEY=你的APIPassword    # 讯飞控制台获取
-LLM_MODEL=4.0Ultra            # 留空用预设默认值
-LLM_EXTRA_BODY=               # 推理模型参数，如 {"thinking":{"type":"enabled"}}
+LLM_PROVIDER=deepseek          # 切换键：deepseek | iflytek | openai | custom
+
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=             # 留空用预设 https://api.deepseek.com/v1
+DEEPSEEK_MODEL=                # 留空用预设 deepseek-chat
+
+IFLYTEK_API_KEY=...
+IFLYTEK_BASE_URL=              # 留空用预设 https://spark-api-open.xf-yun.com/v1
+IFLYTEK_MODEL=                 # 留空用预设 4.0Ultra
+IFLYTEK_EXTRA_BODY=            # 推理模型参数，如 {"thinking":{"type":"enabled"}}
+
+CUSTOM_API_KEY=...
+CUSTOM_BASE_URL=               # 必填
+CUSTOM_MODEL=                  # 必填
 ```
 
 - 预设端点：DeepSeek `api.deepseek.com/v1`、讯飞星火 `spark-api-open.xf-yun.com/v1`、OpenAI `api.openai.com/v1`；
-- 未设置 `LLM_PROVIDER` 时回落旧版 `DEEPSEEK_*` 变量，现有配置不破；
-- `extract-resume` 支持 `--provider` 临时切换（如 A/B 对比 DeepSeek vs 讯飞）；
-- 讯飞推理模型 `spark-x` 需通过 `LLM_EXTRA_BODY` 传 `{"thinking":{"type":"enabled"}}`。
+- 切换供应商只需改 `LLM_PROVIDER`；`--provider` 临时切换（如 A/B 对比 DeepSeek vs 讯飞）同样只读对应配置块；
+- 讯飞推理模型 `spark-x` 需在 `IFLYTEK_EXTRA_BODY` 传 `{"thinking":{"type":"enabled"}}`。
 
 ## 目录结构
 
@@ -111,7 +128,7 @@ resume-analysis-agent/
 ├── src/
 │   ├── main.py              # CLI 入口（rank / enhance / analyze / modify / extract-resume）
 │   ├── core/                # 纯逻辑层（零外部依赖，可单测）
-│   │   ├── dimensions.py    #   七维定义 + category 映射 + 权重
+│   │   ├── dimensions.py    #   七维定义 + category 双向映射 + 7→5 投影 + 权重
 │   │   ├── matching.py      #   归一化 + 命中搜索
 │   │   ├── ranking.py       #   覆盖率粗排 + 少条目惩罚 + IDF
 │   │   └── review.py        #   复核结果合并（重算覆盖率/得分）

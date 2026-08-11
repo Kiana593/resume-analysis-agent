@@ -4,7 +4,7 @@ import os
 import pytest
 
 from src.store import MemoryRoleStore
-from src.tools.analyze import analyze_gap, prepare_gap
+from src.tools.analyze import GAP_DIM_ORDER, analyze_gap, build_gap_report, prepare_gap
 from src.tools.enhance import apply_enhance_review, enhance_matches, prepare_enhance
 from src.tools.modify import (
     find_ai_phrases,
@@ -146,6 +146,67 @@ class TestPrepareGap:
         assert payload["mode"] == "agent_analysis"
         assert payload["role_name"] == role["role_name"]
         assert "prompt" in payload and "dimension_details" in payload
+
+
+class TestBuildGapReport:
+    def test_structure_and_scores(self, memory_store):
+        role = rank_resume("Python", topk=1, store=memory_store)["results"][0]
+        llm = {
+            "match": {"verdict": "yes", "reason": "核心技能匹配"},
+            "dimensions": {"skill": {"gap_level": "partial", "summary": "部分覆盖"}},
+            "missing_skills": [
+                {"skill": "PyTorch", "dim": "skill", "importance": "high"}
+            ],
+            "overall_summary": "整体建议",
+            "learning_path": [
+                {
+                    "step": 1,
+                    "skill": "PyTorch",
+                    "importance": "high",
+                    "prerequisite": "Python",
+                    "resources": ["官方文档"],
+                    "estimated_effort": "2 周",
+                    "why": "基础依赖",
+                }
+            ],
+        }
+        report = build_gap_report(role, llm)
+        assert set(report["dimensions"]) == set(GAP_DIM_ORDER)
+        assert 0 <= report["dimensions"]["skill"]["score"] <= 1
+        assert report["dimensions"]["skill"]["gap_level"] == "partial"
+        assert report["missing_skills"][0]["importance"] == "high"
+        assert report["learning_path"][0]["prerequisite"] == "Python"
+        assert report["learning_path"][0]["resources"] == ["官方文档"]
+        assert report["learning_path"][0]["estimated_effort"] == "2 周"
+        assert report["overall_advice"] == "整体建议"
+
+    def test_fallback_missing_skills(self, memory_store):
+        role = rank_resume("Python", topk=1, store=memory_store)["results"][0]
+        report = build_gap_report(role, {})
+        assert len(report["missing_skills"]) >= 1
+        assert all(m["dim"] in GAP_DIM_ORDER for m in report["missing_skills"])
+
+    def test_sorts_by_importance(self, memory_store):
+        role = rank_resume("Python", topk=1, store=memory_store)["results"][0]
+        llm = {
+            "missing_skills": [
+                {"skill": "A", "dim": "skill", "importance": "low"},
+                {"skill": "B", "dim": "skill", "importance": "high"},
+            ]
+        }
+        report = build_gap_report(role, llm)
+        assert [m["skill"] for m in report["missing_skills"]] == ["B", "A"]
+
+    def test_dim_without_skills_is_sufficient(self):
+        role = {
+            "role_name": "测试岗位",
+            "dimensions": {
+                "preference": {"total": 0, "coverage": 0.0, "hit": [], "miss": []}
+            },
+        }
+        report = build_gap_report(role, {})
+        assert report["dimensions"]["preference"]["gap_level"] == "sufficient"
+        assert report["dimensions"]["preference"]["score"] == 0.0
 
 
 class TestModify:

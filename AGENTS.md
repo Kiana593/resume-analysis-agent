@@ -3,11 +3,17 @@
 本仓库提供一个标准 MCP Server（`mcp_server.py`，工具名：简历岗位匹配分析），用于简历职位匹配分析：
 关键词命中粗排 → Agent 语义复核 → 单岗位差距分析 → 简历修改建议 → 七维雷达图。
 
+## 维度口径（先定，勿摇摆）
+
+- **核心口径为 7 维**：`knowledge`（知识）/ `skill`（技术）/ `qualifications`（任职条件）/ `preference`（招聘偏好）/ `motivation`（动机）/ `trait`（特质）/ `self_concept`（自我概念），严格对齐 Neo4j 图谱 `NormalizedSkill.category`。
+- 大纲"五分类"（知识/技术/动机/特质/自我概念）**仅为原始数据/汇报口径**，不参与核心匹配；对外材料如需五分类，用 `project_to_five_dim()` 做 7→5 投影。
+- 所有提示词、画像 schema、雷达图均为 7 维；不要回退到五/六维口径。
+
 ## 双模式说明
 
 - **MCP 模式（Agent 调用）**：服务器只做纯逻辑（粗排、提示包准备、复核结果合并、雷达图）。
   语义复核 / 差距分析 / 简历修改等 LLM 推理，由调用方 Agent 用自己的大模型完成，
-  服务器不调用任何外部 LLM API（MCP 模式无需 LLM_API_KEY）。
+  服务器不调用任何外部 LLM API（MCP 模式无需 LLM 凭证）。
 - **CLI 模式（命令行）**：`enhance` / `analyze` / `modify` / `extract-resume` 子命令
   通过统一 LLM 适配器（`src/utils/llm.py`）调用，默认 DeepSeek，可切讯飞星火 / OpenAI 兼容服务（读 `.env`）。
 
@@ -80,10 +86,23 @@ python src/main.py extract-resume -i samples/faircv_sample_100.json --provider i
 复制 `.env.example` 为 `.env` 并填写：
 
 ```
-LLM_PROVIDER=deepseek          # deepseek | iflytek | openai | custom
-LLM_API_KEY=
-LLM_MODEL=                     # 留空用预设默认值
-LLM_BASE_URL=                  # 留空用预设默认值
+LLM_PROVIDER=deepseek          # 切换键：deepseek | iflytek | openai | custom
+
+# DeepSeek 配置块
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=             # 留空用预设 https://api.deepseek.com/v1
+DEEPSEEK_MODEL=                # 留空用预设 deepseek-chat
+
+# 讯飞配置块（切到 iflytek 时用 IFLYTEK_*）
+IFLYTEK_API_KEY=
+IFLYTEK_BASE_URL=
+IFLYTEK_MODEL=
+
+# 自定义 OpenAI 兼容服务（切到 custom 时用 CUSTOM_*，base_url/model 必填）
+CUSTOM_API_KEY=
+CUSTOM_BASE_URL=
+CUSTOM_MODEL=
+
 STORE_BACKEND=memory          # memory | neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -91,7 +110,8 @@ NEO4J_PASSWORD=
 NEO4J_DATABASE=neo4j
 ```
 
-未设置 `LLM_PROVIDER` 时回落旧版 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`。
+LLM 配置为**并列 Switch 模式**：每个供应商一个独立块 `{PROVIDER}_*`，`LLM_PROVIDER` 切换；
+不再使用共享的 `LLM_API_KEY / LLM_MODEL / LLM_BASE_URL`。
 
 ## 本地运行
 

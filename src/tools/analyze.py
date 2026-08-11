@@ -8,6 +8,19 @@ from ..prompts.gap_analysis import ROLE_GAP_PROMPT
 from ..utils.llm import call_llm_json
 
 
+GAP_DIM_ORDER = (
+    "knowledge",
+    "skill",
+    "qualifications",
+    "preference",
+    "motivation",
+    "trait",
+    "self_concept",
+)
+
+_IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
 def _build_dimension_details(role: Dict[str, Any]) -> str:
     """把单 Role 的七维命中明细格式化为 prompt 输入块。"""
     dims = role.get("dimensions") or {}
@@ -20,6 +33,92 @@ def _build_dimension_details(role: Dict[str, Any]) -> str:
         miss = detail.get("miss", [])
         lines.append(f"- {label} ({dim}): 命中={hit or '无'} | 缺失={miss or '无'}")
     return "\n".join(lines)
+
+
+def build_gap_report(
+    role: Dict[str, Any],
+    llm_analysis: Dict[str, Any],
+) -> Dict[str, Any]:
+    """把 role 命中明细 + LLM 差距分析合并为结构化 gap 报告（B2 契约）。
+
+    报告包含：匹配结论、7 维得分（0-1 覆盖率 + 命中/缺失）、缺失技能清单
+    （按重要性排序）、学习路径（B3 字段）、整体建议。
+    """
+    dims = role.get("dimensions") or {}
+    llm_dims = llm_analysis.get("dimensions") or {}
+    match = llm_analysis.get("match") or {}
+
+    report_dims: Dict[str, Dict[str, Any]] = {}
+    for dim in GAP_DIM_ORDER:
+        detail = dims.get(dim) or {}
+        ld = llm_dims.get(dim) or {}
+        total = detail.get("total", 0)
+        coverage = float(detail.get("coverage", 0.0) or 0.0)
+        if not total:
+            fallback_level = "sufficient"
+        elif coverage <= 0:
+            fallback_level = "missing"
+        elif coverage < 1:
+            fallback_level = "partial"
+        else:
+            fallback_level = "sufficient"
+        report_dims[dim] = {
+            "score": round(coverage, 4),
+            "gap_level": ld.get("gap_level") or fallback_level,
+            "summary": ld.get("summary", ""),
+            "hit": detail.get("hit", []),
+            "missing": detail.get("miss", []),
+        }
+
+    # 缺失技能清单：LLM 判定优先，回退到 role 的 miss 明细
+    raw_missing = llm_analysis.get("missing_skills")
+    if isinstance(raw_missing, list) and raw_missing:
+        missing_skills = [
+            {
+                "skill": str(m.get("skill", "")),
+                "dim": str(m.get("dim", "")),
+                "importance": str(m.get("importance", "medium")),
+            }
+            for m in raw_missing
+            if m.get("skill")
+        ]
+    else:
+        missing_skills = [
+            {"skill": name, "dim": dim, "importance": "medium"}
+            for dim, detail in report_dims.items()
+            for name in detail["missing"]
+        ]
+    missing_skills.sort(
+        key=lambda x: _IMPORTANCE_RANK.get(x.get("importance", "medium"), 1)
+    )
+
+    # 学习路径：按 B3 契约规范化（LLM 缺字段时给空值/空数组，前端可直接渲染）
+    learning_path: List[Dict[str, Any]] = []
+    for i, step in enumerate(llm_analysis.get("learning_path") or [], start=1):
+        resources = step.get("resources") if isinstance(step.get("resources"), list) else []
+        learning_path.append(
+            {
+                "step": int(step.get("step") or i),
+                "skill": str(step.get("skill", "")),
+                "importance": str(step.get("importance", "medium")),
+                "prerequisite": str(step.get("prerequisite") or "无"),
+                "resources": [str(r) for r in resources],
+                "estimated_effort": str(step.get("estimated_effort") or ""),
+                "why": str(step.get("why") or ""),
+            }
+        )
+
+    return {
+        "role_name": role.get("role_name", ""),
+        "match": {
+            "verdict": match.get("verdict", "no"),
+            "reason": match.get("reason", ""),
+        },
+        "dimensions": report_dims,
+        "missing_skills": missing_skills,
+        "learning_path": learning_path,
+        "overall_advice": llm_analysis.get("overall_summary", ""),
+    }
 
 
 def _format_markdown(role: Dict[str, Any], llm_result: Dict[str, Any]) -> str:
@@ -127,4 +226,5 @@ def analyze_gap(
         "role_name": role.get("role_name", ""),
         "analysis": llm_result,
         "markdown": _format_markdown(role, llm_result),
+        "report": build_gap_report(role, llm_result),
     }

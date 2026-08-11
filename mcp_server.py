@@ -15,7 +15,8 @@ from pathlib import Path
 # 保证以源码方式运行时能 import src
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# 主动加载项目根目录 .env（CLI 的 enhance/analyze/modify 需要 DEEPSEEK_API_KEY；
+# 主动加载项目根目录 .env（CLI 的 enhance/analyze/modify 需要 LLM_PROVIDER 对应供应商的
+# API key，如 DEEPSEEK_API_KEY；
 # MCP 模式不调用 LLM API，LLM 推理由调用方 Agent 自己的模型完成）
 from dotenv import load_dotenv
 
@@ -29,7 +30,12 @@ except ImportError:  # mcp 2.x
     from mcp.server.mcpserver import MCPServer, Image
     _ServerCls = MCPServer
 
-from src.core.dimensions import DIMENSION_KEYS, DIM_LABELS, CATEGORY_TO_DIM
+from src.core.dimensions import (
+    DIMENSION_KEYS,
+    DIM_LABELS,
+    DIM_TO_CATEGORY,
+    CATEGORY_TO_DIM,
+)
 from src.tools.rank import rank_resume as _rank_resume
 from src.tools.enhance import prepare_enhance as _prepare_enhance
 from src.tools.enhance import apply_enhance_review as _apply_enhance_review
@@ -48,8 +54,16 @@ mcp = _ServerCls("resume-analysis", instructions="简历岗位匹配分析（res
 @mcp.resource("dimensions://seven")
 def dimensions_resource() -> str:
     """七维技能分类定义（供 Agent 参考）。"""
-    lines = [f"- {dim}: {DIM_LABELS[dim]}（category: {dim}）" for dim in DIMENSION_KEYS]
-    return "七维画像定义：\n" + "\n".join(lines)
+    lines = [
+        f"- {dim}: {DIM_LABELS[dim]}（NormalizedSkill.category: {DIM_TO_CATEGORY[dim]}）"
+        for dim in DIMENSION_KEYS
+    ]
+    return (
+        "七维画像定义（核心口径，严格对齐图谱 NormalizedSkill.category）：\n"
+        + "\n".join(lines)
+        + "\n\n注：大纲'五分类'（知识/技术/动机/特质/自我概念）仅为原始数据/汇报口径，"
+        "对外材料可用 project_to_five_dim() 做 7→5 投影。"
+    )
 
 
 @mcp.resource("dimensions://category-map")

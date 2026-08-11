@@ -1,4 +1,14 @@
-"""通用 LLM 调用适配器 —— 支持 DeepSeek / 讯飞星火 / OpenAI / 自定义 OpenAI 兼容服务。
+"""通用 LLM 调用适配器 —— 并列 Switch 模式，支持 DeepSeek / 讯飞星火 / OpenAI / 自定义 OpenAI 兼容服务。
+
+每个供应商一个独立配置块，`LLM_PROVIDER` 是切换键：
+    LLM_PROVIDER=deepseek
+    DEEPSEEK_API_KEY=...  DEEPSEEK_BASE_URL=...  DEEPSEEK_MODEL=...
+    IFLYTEK_API_KEY=...   IFLYTEK_BASE_URL=...   IFLYTEK_MODEL=...
+    OPENAI_API_KEY=...    OPENAI_BASE_URL=...    OPENAI_MODEL=...
+    CUSTOM_API_KEY=...    CUSTOM_BASE_URL=...    CUSTOM_MODEL=...
+
+通用（非凭证）变量：LLM_TIMEOUT / LLM_MAX_RETRIES。
+不再使用共享的 LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_EXTRA_BODY。
 
 CLI 模式（enhance / analyze / modify / extract-resume）统一从这里调用；
 MCP 模式不调用任何外部 LLM，本模块仅用于 CLI 路径。
@@ -41,10 +51,10 @@ DEFAULT_PROVIDER = "deepseek"
 
 
 def get_llm_config() -> Dict[str, Any]:
-    """解析环境变量，返回当前 LLM 连接配置。
+    """解析环境变量，返回当前 LLM 连接配置（并列 Switch 模式）。
 
-    优先级：LLM_PROVIDER / LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_EXTRA_BODY。
-    未设置 LLM_PROVIDER 时回落旧版 DEEPSEEK_* 变量（向后兼容）。
+    只读取 `LLM_PROVIDER` 所选供应商的独立配置块 `{PROVIDER}_*`，
+    供应商之间互不干扰；切换供应商只需改 LLM_PROVIDER。
     """
     provider = (os.getenv("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
     if provider not in LLM_PROVIDERS:
@@ -52,33 +62,36 @@ def get_llm_config() -> Dict[str, Any]:
             f"未知 LLM_PROVIDER: {provider}，可选: {', '.join(sorted(LLM_PROVIDERS))}"
         )
     preset = LLM_PROVIDERS[provider]
+    prefix = provider.upper() + "_"
 
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    if provider == "deepseek":
-        # 兼容旧配置：DEEPSEEK_* 优先于预设默认值
-        model = os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or preset.get("default_model")
-        base_url = os.getenv("LLM_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or preset.get("base_url")
-    else:
-        # 显式切换到其他供应商：用 LLM_* 或预设默认值，忽略旧版 DEEPSEEK_*
-        model = os.getenv("LLM_MODEL") or preset.get("default_model")
-        base_url = os.getenv("LLM_BASE_URL") or preset.get("base_url")
+    api_key = os.getenv(prefix + "API_KEY")
+    base_url = os.getenv(prefix + "BASE_URL") or preset.get("base_url")
+    model = os.getenv(prefix + "MODEL") or preset.get("default_model")
+    extra_body_raw = os.getenv(prefix + "EXTRA_BODY")
 
     if not api_key:
-        raise ValueError("缺少 LLM_API_KEY（或 DEEPSEEK_API_KEY），请在 .env 中配置")
+        raise ValueError(
+            f"缺少 {prefix}API_KEY，请在 .env 中配置（当前供应商 {provider}）"
+        )
     if not base_url:
-        raise ValueError("缺少 LLM_BASE_URL，custom provider 必须显式配置端点")
+        raise ValueError(
+            f"缺少 {prefix}BASE_URL，custom provider 必须显式配置端点"
+        )
     if not model:
-        raise ValueError("缺少 LLM_MODEL，custom provider 必须显式配置模型")
+        raise ValueError(
+            f"缺少 {prefix}MODEL，custom provider 必须显式配置模型"
+        )
 
     extra_body: Optional[Dict[str, Any]] = None
-    extra_body_raw = os.getenv("LLM_EXTRA_BODY")
     if extra_body_raw:
         try:
             extra_body = json.loads(extra_body_raw)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"LLM_EXTRA_BODY 不是合法 JSON: {extra_body_raw}") from exc
+            raise ValueError(
+                f"{prefix}EXTRA_BODY 不是合法 JSON: {extra_body_raw}"
+            ) from exc
         if not isinstance(extra_body, dict):
-            raise ValueError("LLM_EXTRA_BODY 必须是 JSON 对象")
+            raise ValueError(f"{prefix}EXTRA_BODY 必须是 JSON 对象")
 
     return {
         "provider": provider,
