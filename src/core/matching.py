@@ -168,6 +168,7 @@ def match_skills_in_text(
             "name": name,
             "category": sk.get("category", ""),
             "dim": dim,
+            "weight": sk.get("weight", 0.0),
         }
         if matched:
             entry["positions"] = positions

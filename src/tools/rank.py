@@ -17,6 +17,7 @@ def rank_resume(
     resume_text: str,
     topk: int = 10,
     store: Optional[RoleStore] = None,
+    use_idf: bool = False,
 ) -> Dict[str, Any]:
     """对简历原文做 Role 粗排，返回 Top-N 及七维覆盖率。
 
@@ -24,6 +25,7 @@ def rank_resume(
         resume_text: 简历 Markdown 原文（非空）。
         topk: 返回前 N 名，默认 10。
         store: 可选 RoleStore 实例；缺省按 STORE_BACKEND 自动选择。
+        use_idf: 是否启用跨岗位 IDF 重加权（默认 False；消融对比用）。
 
     Returns:
         {
@@ -34,9 +36,10 @@ def rank_resume(
                     "role_name": str,
                     "family_name": str,
                     "domain_name": str,
-                    "score": float,           # 覆盖率 × 少条目惩罚
+                    "score": float,           # 加权覆盖率 × 少条目惩罚
                     "hit_skills": int,
                     "total_skills": int,
+                    "skill_weights": {str: float},  # 技能名 → final_score（复核合并重算加权分用）
                     "dimensions": {dim: {"hit": [...], "miss": [...], "coverage": float,
                                          "total": int, "hit_count": int, "miss_count": int}},
                 },
@@ -53,7 +56,12 @@ def rank_resume(
     if not roles:
         raise RuntimeError("Role 数据为空，请检查 STORE_BACKEND 配置。")
 
-    ranked = rank_roles(text, roles, topk=topk if topk and topk > 0 else None)
+    ranked = rank_roles(
+        text,
+        roles,
+        topk=topk if topk and topk > 0 else None,
+        use_idf=use_idf,
+    )
     results: List[Dict[str, Any]] = []
     for item in ranked:
         role = store.get_role_by_name(item["role_name"]) or {}
@@ -66,6 +74,11 @@ def rank_resume(
                 "score": item["score"],
                 "hit_skills": item["hit_skills"],
                 "total_skills": item["total_skills"],
+                "skill_weights": {
+                    s.get("name", ""): float(s.get("weight") or 0.0)
+                    for s in skills
+                    if s.get("name")
+                },
                 "dimensions": compute_dimension_hits(text, skills),
             }
         )

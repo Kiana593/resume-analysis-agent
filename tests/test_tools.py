@@ -113,6 +113,52 @@ class TestApplyEnhanceReview:
         with pytest.raises(ValueError):
             apply_enhance_review(rank_result, {})
 
+    def test_merge_recomputes_weighted_score(self):
+        raw = {
+            "topk": 1,
+            "count": 1,
+            "results": [
+                {
+                    "role_name": "R1",
+                    "score": 0.1,
+                    "hit_skills": 1,
+                    "total_skills": 3,
+                    "skill_weights": {"Java": 0.9, "Spring": 0.7, "Vue": 0.4},
+                    "dimensions": {
+                        "skill": {
+                            "hit": ["Java"],
+                            "miss": ["Spring", "Vue"],
+                            "coverage": 1 / 3,
+                            "total": 3,
+                            "hit_count": 1,
+                            "miss_count": 2,
+                        }
+                    },
+                }
+            ],
+        }
+        review = {
+            "topk": 1,
+            "results": [
+                {
+                    "role_name": "R1",
+                    "review_note": "补录 Spring",
+                    "dimensions": {"skill": {"hit": ["Java", "Spring"], "miss": ["Vue"]}},
+                }
+            ],
+        }
+        out = apply_enhance_review(raw, review)
+        item = out["results"][0]
+        # weighted = (0.9+0.7)/(0.9+0.7+0.4) = 0.8；penalty = 3/10 = 0.3 → 0.24
+        assert item["score"] == pytest.approx(0.24)
+        assert item["hit_skills"] == 2
+
+    def test_rank_resume_exposes_skill_weights(self, memory_store):
+        rank_result = rank_resume("Python", topk=1, store=memory_store)
+        item = rank_result["results"][0]
+        assert isinstance(item.get("skill_weights"), dict)
+        assert item["skill_weights"]
+
 
 class TestAnalyzeGap:
     def test_with_injected_llm(self, memory_store):

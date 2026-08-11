@@ -50,7 +50,7 @@
 |------|------|------|
 | `rank_resume` | 简历文本 + topk | 纯关键词命中粗排，返回 Top-N + 七维覆盖率 |
 | `prepare_enhance` | rank JSON + 简历文本 + topk | 返回语义复核提示包（prompt + rank_data + schema） |
-| `apply_enhance_review` | rank JSON + 复核 JSON | 合并复核结果，重算覆盖率/得分（纯逻辑） |
+| `apply_enhance_review` | rank JSON + 复核 JSON | 合并复核结果，按 skill_weights 重算加权得分（纯逻辑） |
 | `prepare_gap` | 单 role JSON + 简历文本 | 返回差距分析提示包 |
 | `prepare_resume_edit` | 单 role JSON + 简历文本 | 返回简历修改提示包（含真实性红线） |
 | `validate_resume_edit` | 单 role JSON + 简历文本 + 修改建议 JSON | 防造假校验报告（valid/violations/stats） |

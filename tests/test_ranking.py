@@ -4,14 +4,20 @@ import pytest
 from src.core.ranking import _apply_idf, compute_dimension_hits, rank_roles
 
 
-def _role(name, jd_count, skills):
+def _role(name, jd_count, skills, weights=None):
+    weights = weights or [1.0] * len(skills)
     return {
         "role_name": name,
         "family_name": "算法",
         "domain_name": "AI",
         "jd_count": jd_count,
         "skills": [
-            {"name": s, "category": "技术", "weight": 1.0, "rank": i + 1}
+            {
+                "name": s,
+                "category": "技术",
+                "weight": float(weights[i]),
+                "rank": i + 1,
+            }
             for i, s in enumerate(skills)
         ],
     }
@@ -75,6 +81,45 @@ class TestRankRoles:
     def test_skips_no_skills(self):
         roles = [_role("无技能", 1, [])]
         assert rank_roles("Python", roles) == []
+
+
+class TestWeightedScore:
+    def test_score_uses_final_score_weights(self):
+        # Java 0.9 + Spring 0.7 命中，Vue 0.4 未命中
+        # weighted = 1.6 / 2.0 = 0.8；penalty = 3/10 = 0.3 → score = 0.24
+        roles = [
+            _role("加权岗", 2, ["Java", "Spring", "Vue"], weights=[0.9, 0.7, 0.4])
+        ]
+        ranked = rank_roles("熟悉 Java 与 Spring", roles)
+        assert ranked[0]["hit_skills"] == 2
+        assert ranked[0]["score"] == pytest.approx(0.24)
+
+    def test_score_differs_from_plain_hit_rate(self):
+        roles = [
+            _role("加权岗", 2, ["Java", "Spring", "Vue"], weights=[0.9, 0.7, 0.4])
+        ]
+        ranked = rank_roles("熟悉 Java 与 Spring", roles)
+        # 纯命中率 2/3 ≈ 0.6667，加权覆盖率 0.8，两者不同
+        assert ranked[0]["score"] != pytest.approx((2 / 3) * 0.3)
+
+    def test_zero_total_weight_falls_back_to_hit_rate(self):
+        roles = [
+            _role("零权重", 2, ["Python", "PyTorch", "C++"], weights=[0.0, 0.0, 0.0])
+        ]
+        ranked = rank_roles("Python 与 PyTorch", roles)
+        assert ranked[0]["score"] == pytest.approx((2 / 3) * 0.3)
+
+    def test_use_idf_flag_toggles_rare_weighting(self):
+        roles = [
+            _role("R1", 2, ["通用技能", "特有A"]),
+            _role("R2", 2, ["通用技能", "特有B"]),
+        ]
+        # 默认关闭 IDF：命中"通用技能" → 覆盖率 1/2 × penalty(0.2) = 0.1
+        off = rank_roles("通用技能", roles, use_idf=False)[0]["score"]
+        # 开启 IDF：通用技能 df=2 → idf=0 → 权重为 0 → 加权覆盖率 0
+        on = rank_roles("通用技能", roles, use_idf=True)[0]["score"]
+        assert off == pytest.approx(0.1)
+        assert on == pytest.approx(0.0)
 
 
 class TestComputeDimensionHits:

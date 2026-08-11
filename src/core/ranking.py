@@ -1,9 +1,9 @@
-"""Role 排名 + 覆盖率计算 — 纯函数，零外部依赖。
+"""Role 排名 + 加权覆盖率计算 — 纯函数，零外部依赖。
 
 职责：
-- 简历原文 vs 全部 Role 的核心技能覆盖率粗排
+- 简历原文 vs 全部 Role 的核心技能加权覆盖率粗排（final_score 支持度加权）
 - 少条目惩罚（核心技能 < K 的 Role 按 n/K 打折）
-- 按技能跨 Role 稀有度做 IDF 重加权
+- IDF 重加权（可选开关，默认关闭，供消融对比）
 - 七维命中明细
 """
 
@@ -11,6 +11,7 @@ import copy
 import math
 from typing import Any, Dict, List, Optional, Sequence
 
+from .dimensions import CATEGORY_TO_DIM
 from .matching import match_skills_in_text
 
 # 少技能惩罚阈值：核心技能数少于该值的 Role，覆盖率按 n/K 打折
@@ -61,23 +62,32 @@ def rank_roles(
     raw_text: str,
     roles: Sequence[Dict[str, Any]],
     topk: Optional[int] = None,
+    use_idf: bool = False,
 ) -> List[Dict[str, Any]]:
-    """简历原文 vs 全部 Role 的核心技能覆盖率粗排。
+    """简历原文 vs 全部 Role 的核心技能加权覆盖率粗排。
 
     直接在简历原文（Markdown）中做归一化子串搜索，
     不依赖任何提取结果。
+
+    评分公式：
+        score = (Σ命中技能 final_score / Σ全部技能 final_score) × min(1, 技能总数/10)
+    final_score 取图谱 HAS_CORE_SKILL 边权重（JD 支持度），全部权重为 0 时
+    回退为纯命中率，避免除零。use_idf=True 时先按技能跨岗位稀有度重加权
+    （消融对比用，默认关闭）。
 
     Args:
         raw_text: 简历 Markdown 原文。
         roles: store 层加载的 Role 列表（role_name/skills/jd_count 等）。
         topk: 只返回前 N 名（None/<=0 返回全部）。
+        use_idf: 是否启用跨岗位 IDF 重加权（默认 False）。
 
     Returns:
         按 score 降序的列表，每条：
         {"role_name", "family_name", "domain_name", "jd_count",
          "score", "hit_skills", "total_skills"}
     """
-    roles = _apply_idf(roles)
+    if use_idf:
+        roles = _apply_idf(roles)
 
     scored: List[Dict[str, Any]] = []
     for role in roles:
@@ -90,8 +100,17 @@ def rank_roles(
         result = match_skills_in_text(raw_text, skills)
 
         n_skills = len(skills)
+        # 与 match 的维度口径一致：只统计有有效 category 映射的技能
+        dim_valid = [s for s in skills if s.get("category") in CATEGORY_TO_DIM]
+        total_weight = sum(float(s.get("weight") or 0.0) for s in dim_valid)
+        hit_weight = sum(float(e.get("weight") or 0.0) for e in result["hit"])
+        if total_weight > 0:
+            coverage = hit_weight / total_weight
+        else:
+            # 全部权重为 0（如数据缺失）时回退为纯命中率
+            coverage = result["hit_count"] / max(len(dim_valid), 1)
         penalty = min(1.0, n_skills / CORE_SKILL_PENALTY_K)
-        score = round((result["hit_count"] / max(n_skills, 1)) * penalty, 4)
+        score = round(coverage * penalty, 4)
 
         scored.append(
             {

@@ -75,18 +75,19 @@ def category_map_resource() -> str:
 # ==================== 工具 ====================
 
 @mcp.tool()
-def rank_resume(resume_text: str, topk: int = 10) -> dict:
+def rank_resume(resume_text: str, topk: int = 10, use_idf: bool = False) -> dict:
     """对简历原文做关键词命中粗排，返回 Top-N Role 及七维覆盖率。
 
     Args:
         resume_text: 简历 Markdown 原文（PDF/DOCX 需先用 markitdown 转换）。
         topk: 返回前 N 名（默认 10）。
+        use_idf: 是否启用跨岗位 IDF 重加权（默认 False，消融对比用）。
 
     Returns:
         {"topk", "count", "results": [{role_name, family_name, domain_name,
                                        score, hit_skills, total_skills, dimensions}]}
     """
-    return _rank_resume(resume_text, topk=topk)
+    return _rank_resume(resume_text, topk=topk, use_idf=use_idf)
 
 
 @mcp.tool()

@@ -59,16 +59,25 @@ def merge_enhance_review(
 
         review_dims = item.get("dimensions") or {}
         merged_dims: Dict[str, Dict[str, Any]] = {}
-        dim_hit_total = 0
+        hit_names: List[str] = []
+        total_names: List[str] = []
         for dim, detail in (raw.get("dimensions") or {}).items():
             merged_dims[dim] = _merge_dimension(dim, detail, review_dims.get(dim) or {})
-            dim_hit_total += merged_dims[dim]["hit_count"]
+            hit_names.extend(merged_dims[dim]["hit"])
+            total_names.extend(merged_dims[dim]["hit"] + merged_dims[dim]["miss"])
 
         dim_total = sum(d["total"] for d in merged_dims.values())
         total_skills = max(dim_total, raw.get("total_skills", 0) or 0)
-        hit_skills = dim_hit_total
+        hit_skills = len(hit_names)
+        weights = raw.get("skill_weights") or {}
+        total_weight = sum(float(weights.get(n, 0.0)) for n in total_names)
+        hit_weight = sum(float(weights.get(n, 0.0)) for n in hit_names)
+        if total_weight > 0:
+            coverage = hit_weight / total_weight
+        else:
+            coverage = hit_skills / max(total_skills, 1)
         penalty = min(1.0, total_skills / 10.0)
-        score = round((hit_skills / max(total_skills, 1)) * penalty, 4)
+        score = round(coverage * penalty, 4)
 
         results.append(
             {
