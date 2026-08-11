@@ -2,7 +2,7 @@
 
 基于关键词命中的简历-岗位匹配分析 **MCP Server**（产品名：简历岗位匹配分析；MCP 注册名：resume-analysis）：`PDF/DOCX → Markdown → 关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 七维雷达图`。
 
-双模式：**MCP 模式**的语义复核 / 差距分析 / 简历修改由调用方 Agent 用自己的大模型完成，服务器不调用外部 LLM API；**CLI 模式**的 `enhance` / `analyze` / `modify` 直接调用 DeepSeek API。
+双模式：**MCP 模式**的语义复核 / 差距分析 / 简历修改由调用方 Agent 用自己的大模型完成，服务器不调用外部 LLM API；**CLI 模式**的 `enhance` / `analyze` / `modify` / `extract-resume` 通过统一 LLM 适配器调用（默认 DeepSeek，可切讯飞星火 / OpenAI 兼容服务）。
 
 支持 Claude Desktop、Codex、Cursor、Continue 等任意兼容 MCP 的 Agent 平台即插即用；无 MCP 环境时也可用 CLI 或直接调用 `src/tools/` 函数。
 
@@ -32,6 +32,8 @@ python mcp_server.py --transport sse
 | `prepare_gap` | 单 Role JSON + 简历原文 | 差距分析提示包 | Agent 用自己的模型输出 Markdown |
 | `prepare_resume_edit` | 单 Role JSON + 简历原文 | 简历修改提示包（含真实性红线） | Agent 用自己的模型输出修改建议 |
 | `validate_resume_edit` | 单 Role JSON + 简历原文 + 修改建议 JSON | 防造假校验报告（valid/violations/stats） | 纯逻辑校验技能地基、指标地基、AI 味词汇 |
+| `prepare_resume_extract` | 简历原文 + 目标岗位（可选） | 7 维画像提取提示包（prompt + schema） | Agent 用自己的模型输出画像 |
+| `apply_resume_extract` | 简历原文 + 提取 JSON | 规范化 7 维画像 + 防幻觉校验（超长自动截断标注） | 纯逻辑，不调用 LLM |
 
 两个静态资源供 Agent 参考：`dimensions://seven`（七维定义）、`dimensions://category-map`（Neo4j category → 七维 key 映射）。
 
@@ -62,7 +64,7 @@ STORE_BACKEND = "memory"
 ```
 
 保存后**重启 Codex**（MCP server 在启动时加载），新会话即可使用
-`rank_resume` / `prepare_enhance` / `apply_enhance_review` / `prepare_gap` / `prepare_resume_edit` / `validate_resume_edit` / `visualize_radar` 七个工具。
+`rank_resume` / `prepare_enhance` / `apply_enhance_review` / `prepare_gap` / `prepare_resume_edit` / `validate_resume_edit` / `prepare_resume_extract` / `apply_resume_extract` / `visualize_radar` 九个工具。
 
 或使用 CLI 命令添加（效果相同）：
 
@@ -78,8 +80,26 @@ python src/main.py enhance -r rank_result.json --resume 简历.pdf --topk 20
 python src/main.py enhance -r rank_result.json --resume 简历.pdf --topk 20 --analyze   # 复核后自动对第 1 名做差距分析
 python src/main.py analyze -r role.json --resume 简历.pdf
 python src/main.py modify -r role.json --resume 简历.pdf   # 针对目标岗位的简历修改建议
+python src/main.py extract-resume -i resumes/ -o resume_profiles.json --workers 4   # 简历 → 7维画像（LLM 批量提取，4 线程并发）
+python src/main.py extract-resume -i samples/faircv_sample_100.json -o faircv_profiles.json --provider iflytek
 python src/main.py --store neo4j rank -r 简历.pdf
 ```
+
+## LLM 供应商切换
+
+CLI 通过 `src/utils/llm.py` 的统一适配器调用模型（OpenAI 兼容协议），支持多供应商：
+
+```ini
+LLM_PROVIDER=iflytek          # deepseek | iflytek | openai | custom
+LLM_API_KEY=你的APIPassword    # 讯飞控制台获取
+LLM_MODEL=4.0Ultra            # 留空用预设默认值
+LLM_EXTRA_BODY=               # 推理模型参数，如 {"thinking":{"type":"enabled"}}
+```
+
+- 预设端点：DeepSeek `api.deepseek.com/v1`、讯飞星火 `spark-api-open.xf-yun.com/v1`、OpenAI `api.openai.com/v1`；
+- 未设置 `LLM_PROVIDER` 时回落旧版 `DEEPSEEK_*` 变量，现有配置不破；
+- `extract-resume` 支持 `--provider` 临时切换（如 A/B 对比 DeepSeek vs 讯飞）；
+- 讯飞推理模型 `spark-x` 需通过 `LLM_EXTRA_BODY` 传 `{"thinking":{"type":"enabled"}}`。
 
 ## 目录结构
 
@@ -89,7 +109,7 @@ resume-analysis-agent/
 ├── AGENTS.md                # Agent 操作指南（工作流 + 工具表）
 ├── mcp.json.example         # 各平台配置模板
 ├── src/
-│   ├── main.py              # CLI 入口（rank / enhance / analyze / modify）
+│   ├── main.py              # CLI 入口（rank / enhance / analyze / modify / extract-resume）
 │   ├── core/                # 纯逻辑层（零外部依赖，可单测）
 │   │   ├── dimensions.py    #   七维定义 + category 映射 + 权重
 │   │   ├── matching.py      #   归一化 + 命中搜索
@@ -99,7 +119,7 @@ resume-analysis-agent/
 │   │   ├── interface.py     #   RoleStore 抽象接口
 │   │   ├── memory_store.py  #   内存示例数据（默认，开箱即用）
 │   │   └── neo4j_store.py   #   Neo4j 实现
-│   ├── tools/               # 工具纯函数（rank/enhance/analyze/modify/visualize）
+│   ├── tools/               # 工具纯函数（rank/enhance/analyze/modify/visualize/extract）
 │   ├── prompts/             # LLM 提示词模板
 │   └── utils/               # LLM / markitdown 封装
 ├── tests/                   # pytest 单测（core / store / tools）

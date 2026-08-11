@@ -37,8 +37,10 @@ from src.tools.analyze import prepare_gap as _prepare_gap
 from src.tools.modify import prepare_resume_edit as _prepare_resume_edit
 from src.tools.modify import validate_resume_edit as _validate_resume_edit
 from src.tools.visualize import render_radar as _render_radar
+from src.tools.resume_extract import prepare_resume_extract as _prepare_resume_extract
+from src.tools.resume_extract import apply_resume_extract as _apply_resume_extract
 
-mcp = _ServerCls("resume-analysis", instructions="简历岗位匹配分析（resume-analysis）：关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 雷达图。MCP 模式不调用外部 LLM API，语义复核/差距分析/修改建议由调用方 Agent 用自己的大模型完成。")
+mcp = _ServerCls("resume-analysis", instructions="简历岗位匹配分析（resume-analysis）：关键词命中粗排 → Agent 语义复核 → 差距分析 → 简历修改建议 → 简历画像提取（7 维）→ 雷达图。MCP 模式不调用外部 LLM API，语义复核/差距分析/修改建议/画像提取由调用方 Agent 用自己的大模型完成。")
 
 
 # ==================== 静态资源 ====================
@@ -178,6 +180,41 @@ def validate_resume_edit(role_json: str, resume_text: str, edit_json: str) -> di
     role = json.loads(role_json)
     edit = json.loads(edit_json)
     return _validate_resume_edit(role, resume_text, edit)
+
+
+@mcp.tool()
+def prepare_resume_extract(resume_text: str, position: str = "") -> dict:
+    """为简历画像提取准备提示包：返回提取提示词 + 输出 schema。
+
+    MCP 模式不调用 LLM API；Agent 拿到提示包后用自己的模型输出 7 维画像 JSON，
+    再调用 apply_resume_extract(resume_text, extract_json) 规范化并校验。
+
+    Args:
+        resume_text: 简历 Markdown 原文。
+        position: 目标岗位（可选，缺省按简历求职意向）。
+
+    Returns:
+        {"mode", "prompt", "resume_text", "position", "output_schema", "next_step"}
+    """
+    return _prepare_resume_extract(resume_text, position or None)
+
+
+@mcp.tool()
+def apply_resume_extract(resume_text: str, extract_json: str) -> dict:
+    """把 Agent 产出的简历画像 JSON 规范化为 7 维画像并做防幻觉校验（纯逻辑，不调用 LLM）。
+
+    超长条目（>30 字）自动截断并记录到 truncations；校验条目是否来自原文、
+    去重、维度白名单。返回 {"position", "dimensions", "truncations", "stats", "validation"}。
+
+    Args:
+        resume_text: 简历 Markdown 原文。
+        extract_json: Agent 按 prepare_resume_extract 的 schema 产出的提取 JSON 字符串。
+
+    Returns:
+        规范化后的 7 维画像 + 校验报告。
+    """
+    extract = json.loads(extract_json)
+    return _apply_resume_extract(resume_text, extract)
 
 
 # ==================== 入口 ====================

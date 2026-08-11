@@ -2,7 +2,7 @@
 
 双模式：
 - MCP/Agent 模式：prepare_resume_edit 返回提示包，Agent 用自己的模型产出建议；
-- CLI 模式：suggest_resume_edit 直接调用 DeepSeek API。
+- CLI 模式：suggest_resume_edit 直接调用当前配置的 LLM（默认 DeepSeek，可切讯飞等）。
 """
 
 import json
@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from ..core.edit_validation import validate_edit_suggestions
 from ..prompts.modify import MODIFY_AI_PHRASES, MODIFY_PROMPT
-from ..utils.llm import call_deepseek_json
+from ..utils.llm import call_llm_json
 
 
 def find_ai_phrases(text: str) -> List[str]:
@@ -105,7 +105,7 @@ def suggest_resume_edit(
     resume_text: str,
     llm_func: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """CLI 模式：调用 DeepSeek API 生成修改建议。"""
+    """CLI 模式：调用当前配置的 LLM 生成修改建议。"""
     text = (resume_text or "").strip()
     if not text:
         raise ValueError("resume_text 不能为空")
@@ -113,7 +113,7 @@ def suggest_resume_edit(
         raise ValueError("role invalid: missing role_name")
 
     payload = prepare_resume_edit(role, text)
-    caller = llm_func or call_deepseek_json
+    caller = llm_func or call_llm_json
     llm_result = caller(payload["prompt"])
     if not isinstance(llm_result, dict):
         raise RuntimeError("LLM 返回格式异常：期望 JSON 对象")

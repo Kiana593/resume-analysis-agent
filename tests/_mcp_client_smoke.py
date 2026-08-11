@@ -38,6 +38,8 @@ async def main():
                 "prepare_gap",
                 "prepare_resume_edit",
                 "validate_resume_edit",
+                "prepare_resume_extract",
+                "apply_resume_extract",
                 "visualize_radar",
             } <= set(names)
             resume = (
@@ -59,6 +61,31 @@ async def main():
                     f"  {item['role_name']}  score={item['score']:.1%}  "
                     f"hits={item['hit_skills']}/{item['total_skills']}"
                 )
+            extract_result = await asyncio.wait_for(
+                session.call_tool(
+                    "apply_resume_extract",
+                    {
+                        "resume_text": resume,
+                        "extract_json": json.dumps(
+                            {
+                                "dimensions": {
+                                    "knowledge": ["Python", "深度学习"],
+                                    "skill": ["PyTorch", "Transformer 微调", "分布式训练"],
+                                    "qualifications": [],
+                                    "preference": [],
+                                    "motivation": ["对 AI 技术充满热情"],
+                                    "trait": ["自驱力强"],
+                                    "self_concept": [],
+                                }
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ),
+                timeout=60,
+            )
+            extract_data = json.loads(extract_result.content[0].text)
+            print("apply_resume_extract OK: valid =", extract_data["validation"]["ok"])
             print("CLIENT SMOKE TEST PASSED")
 
 

@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from ..core.dimensions import DIM_LABELS
 from ..prompts.gap_analysis import ROLE_GAP_PROMPT
-from ..utils.llm import call_deepseek_json
+from ..utils.llm import call_llm_json
 
 
 def _build_dimension_details(role: Dict[str, Any]) -> str:
@@ -118,7 +118,7 @@ def analyze_gap(
         dimension_details=_build_dimension_details(role),
         resume_raw_text=text[:12000],
     )
-    caller = llm_func or call_deepseek_json
+    caller = llm_func or call_llm_json
     llm_result = caller(prompt)
     if not isinstance(llm_result, dict):
         raise RuntimeError("LLM 差距分析返回格式异常：期望 JSON 对象。")

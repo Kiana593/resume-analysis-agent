@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from ..prompts.enhance import ENHANCE_PROMPT
 from ..core.review import check_review_structure, merge_enhance_review
-from ..utils.llm import call_deepseek_json
+from ..utils.llm import call_llm_json
 
 
 def _trim_rank_result(rank_result: Dict[str, Any], topk: int) -> Dict[str, Any]:
@@ -107,7 +107,7 @@ def enhance_matches(
         rank_result: rank_resume() 的返回（含 results 列表）。
         resume_text: 简历 Markdown 原文。
         topk: 复核前 N 名，默认 20。
-        llm_func: 可注入的 LLM 调用函数（测试用），缺省用 call_deepseek_json。
+        llm_func: 可注入的 LLM 调用函数（测试用），缺省用 call_llm_json。
 
     Returns:
         LLM 修正后的 JSON：
@@ -126,7 +126,7 @@ def enhance_matches(
         resume_text=text[:12000],  # 控制 token 成本
         rank_json=json.dumps(trimmed, ensure_ascii=False),
     )
-    caller = llm_func or call_deepseek_json
+    caller = llm_func or call_llm_json
     result = caller(prompt)
     if not isinstance(result, dict):
         raise RuntimeError("LLM 复核返回格式异常：期望 JSON 对象。")

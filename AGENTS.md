@@ -7,8 +7,9 @@
 
 - **MCP 模式（Agent 调用）**：服务器只做纯逻辑（粗排、提示包准备、复核结果合并、雷达图）。
   语义复核 / 差距分析 / 简历修改等 LLM 推理，由调用方 Agent 用自己的大模型完成，
-  服务器不调用任何外部 LLM API（MCP 模式无需 DEEPSEEK_API_KEY）。
-- **CLI 模式（命令行）**：`enhance` / `analyze` / `modify` 子命令直接调用 DeepSeek API（读 `.env`）。
+  服务器不调用任何外部 LLM API（MCP 模式无需 LLM_API_KEY）。
+- **CLI 模式（命令行）**：`enhance` / `analyze` / `modify` / `extract-resume` 子命令
+  通过统一 LLM 适配器（`src/utils/llm.py`）调用，默认 DeepSeek，可切讯飞星火 / OpenAI 兼容服务（读 `.env`）。
 
 ## 工作流（MCP / Agent，推荐顺序）
 
@@ -30,6 +31,12 @@
    针对性修改建议（遵守真实性红线，不重写全文）；建议产出后再调
    `validate_resume_edit(role_json, resume_text, edit_json)` 做防造假校验
    （技能地基 / 指标地基 / AI 味词汇，纯逻辑），有 critical 问题时先修正再给用户。
+8. **简历画像提取**（可选）：CLI 用 `extract-resume` 把简历批量提取为 7 维画像 JSON
+   （`knowledge/skill/qualifications/preference/motivation/trait/self_concept`），
+   与岗位画像同 schema，作为后续维度对维度匹配与候选人雷达图的标准化输入；
+   MCP/Agent 模式调 `prepare_resume_extract` 拿提示包，用自己的模型输出画像后
+   再调 `apply_resume_extract(resume_text, extract_json)` 规范化 + 防幻觉校验
+   （超长条目自动截断并记录 truncations）。
 
 ## 工具清单（MCP）
 
@@ -41,6 +48,8 @@
 | `prepare_gap` | 单 role JSON + 简历文本 | 返回差距分析提示包 |
 | `prepare_resume_edit` | 单 role JSON + 简历文本 | 返回简历修改提示包（含真实性红线） |
 | `validate_resume_edit` | 单 role JSON + 简历文本 + 修改建议 JSON | 防造假校验报告（valid/violations/stats） |
+| `prepare_resume_extract` | 简历文本 + 目标岗位（可选） | 7 维画像提取提示包（prompt + schema） |
+| `apply_resume_extract` | 简历文本 + 提取 JSON | 规范化 7 维画像 + 防幻觉校验（超长自动截断标注） |
 | `visualize_radar` | 单 role JSON + 岗位名 | 七维雷达图 PNG |
 
 ## 资源
@@ -57,6 +66,8 @@ python src/main.py rank -r 简历.pdf --topk 20
 python src/main.py enhance -r rank.json --resume 简历.pdf --topk 20
 python src/main.py analyze -r role.json --resume 简历.pdf
 python src/main.py modify -r role.json --resume 简历.pdf
+python src/main.py extract-resume -i resumes/ -o resume_profiles.json
+python src/main.py extract-resume -i samples/faircv_sample_100.json --provider iflytek --workers 4
 ```
 
 ## 数据源切换
@@ -69,15 +80,18 @@ python src/main.py modify -r role.json --resume 简历.pdf
 复制 `.env.example` 为 `.env` 并填写：
 
 ```
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_MODEL=deepseek-chat
+LLM_PROVIDER=deepseek          # deepseek | iflytek | openai | custom
+LLM_API_KEY=
+LLM_MODEL=                     # 留空用预设默认值
+LLM_BASE_URL=                  # 留空用预设默认值
 STORE_BACKEND=memory          # memory | neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=
 NEO4J_DATABASE=neo4j
 ```
+
+未设置 `LLM_PROVIDER` 时回落旧版 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`。
 
 ## 本地运行
 
@@ -90,5 +104,5 @@ python mcp_server.py --transport sse
 ## 注意事项
 
 - `rank_resume` 要求简历为纯文本/Markdown；PDF/DOCX 请先用 markitdown 转换（见 `src/utils/text.py`）。
-- MCP 模式不依赖 DeepSeek API Key；CLI 的 `enhance` / `analyze` / `modify` 依赖。
+- MCP 模式不依赖 LLM API Key；CLI 的 `enhance` / `analyze` / `modify` / `extract-resume` 依赖。
 - 代码分层：`mcp_server.py`（平台边界）→ `src/tools/`（工具实现）→ `src/core/`（纯逻辑，零外部依赖）+ `src/store/`（数据抽象）。

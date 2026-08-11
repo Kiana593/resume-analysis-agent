@@ -1,13 +1,116 @@
-"""公共 LLM 调用工具 —— 统一 DeepSeek 调用与 JSON 解析。"""
+"""通用 LLM 调用适配器 —— 支持 DeepSeek / 讯飞星火 / OpenAI / 自定义 OpenAI 兼容服务。
+
+CLI 模式（enhance / analyze / modify / extract-resume）统一从这里调用；
+MCP 模式不调用任何外部 LLM，本模块仅用于 CLI 路径。
+"""
 
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# OpenAI 兼容通道的 provider 预设表
+LLM_PROVIDERS: Dict[str, Dict[str, Optional[str]]] = {
+    "deepseek": {
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+    },
+    "iflytek": {
+        "label": "讯飞星火",
+        "base_url": "https://spark-api-open.xf-yun.com/v1",
+        "default_model": "4.0Ultra",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o",
+    },
+    "custom": {
+        "label": "自定义",
+        "base_url": None,
+        "default_model": None,
+    },
+}
+
+DEFAULT_PROVIDER = "deepseek"
+
+
+def get_llm_config() -> Dict[str, Any]:
+    """解析环境变量，返回当前 LLM 连接配置。
+
+    优先级：LLM_PROVIDER / LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_EXTRA_BODY。
+    未设置 LLM_PROVIDER 时回落旧版 DEEPSEEK_* 变量（向后兼容）。
+    """
+    provider = (os.getenv("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+    if provider not in LLM_PROVIDERS:
+        raise ValueError(
+            f"未知 LLM_PROVIDER: {provider}，可选: {', '.join(sorted(LLM_PROVIDERS))}"
+        )
+    preset = LLM_PROVIDERS[provider]
+
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    if provider == "deepseek":
+        # 兼容旧配置：DEEPSEEK_* 优先于预设默认值
+        model = os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or preset.get("default_model")
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or preset.get("base_url")
+    else:
+        # 显式切换到其他供应商：用 LLM_* 或预设默认值，忽略旧版 DEEPSEEK_*
+        model = os.getenv("LLM_MODEL") or preset.get("default_model")
+        base_url = os.getenv("LLM_BASE_URL") or preset.get("base_url")
+
+    if not api_key:
+        raise ValueError("缺少 LLM_API_KEY（或 DEEPSEEK_API_KEY），请在 .env 中配置")
+    if not base_url:
+        raise ValueError("缺少 LLM_BASE_URL，custom provider 必须显式配置端点")
+    if not model:
+        raise ValueError("缺少 LLM_MODEL，custom provider 必须显式配置模型")
+
+    extra_body: Optional[Dict[str, Any]] = None
+    extra_body_raw = os.getenv("LLM_EXTRA_BODY")
+    if extra_body_raw:
+        try:
+            extra_body = json.loads(extra_body_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM_EXTRA_BODY 不是合法 JSON: {extra_body_raw}") from exc
+        if not isinstance(extra_body, dict):
+            raise ValueError("LLM_EXTRA_BODY 必须是 JSON 对象")
+
+    return {
+        "provider": provider,
+        "label": preset["label"],
+        "api_key": api_key,
+        "model": model,
+        "base_url": base_url,
+        "extra_body": extra_body,
+        "timeout": float(os.getenv("LLM_TIMEOUT", "60")),
+        "max_retries": int(os.getenv("LLM_MAX_RETRIES", "2")),
+    }
+
+
+def build_chat_model(
+    cfg: Optional[Dict[str, Any]] = None,
+    temperature: float = 0.0,
+) -> Any:
+    """按配置构造 langchain ChatOpenAI（OpenAI 兼容协议，各 provider 通用）。"""
+    from langchain_openai import ChatOpenAI
+
+    cfg = cfg or get_llm_config()
+    kwargs: Dict[str, Any] = {
+        "model": cfg["model"],
+        "api_key": cfg["api_key"],
+        "base_url": cfg["base_url"],
+        "temperature": temperature,
+        "timeout": cfg["timeout"],
+        "max_retries": cfg["max_retries"],
+    }
+    if cfg.get("extra_body"):
+        kwargs["extra_body"] = cfg["extra_body"]
+    return ChatOpenAI(**kwargs)
 
 
 def _repair_json(content: str) -> str:
@@ -27,32 +130,31 @@ def _repair_json(content: str) -> str:
     if content.startswith("\ufeff"):
         content = content.lstrip("\ufeff")
 
-    # 2. 修复尾部逗号（, 后面紧跟 } 或 ]）
+    # 2. 修复尾部逗号：逗号后面紧跟 } 或 ]
     content = re.sub(r",\s*([}\]])", r"\1", content)
 
-    # 3. 字符串值中常见未转义字符：把值里的裸换行换成空格
-    #    仅处理双引号字符串内部（简化：替换所有不在引号结构中的裸控制字符）
+    # 3. 移除字符串值中常见的未转义控制字符
     content = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", content)
 
     # 4. 如果以截断的形式结束（无闭合括号），按栈顺序补全
     stripped = content.rstrip()
     stack: list[str] = []
     for ch in stripped:
-        if ch in "{[":  # noqa: SIM114
+        if ch in "{[":
             stack.append(ch)
         elif ch in "}]" and stack:
             stack.pop()
     if stack:
         for ch in reversed(stack):
             content += "}" if ch == "{" else "]"
-        # 补全可能引入新的尾随逗号，再次修复
+        # 补全可能引入新的尾部逗号，再次修复
         content = re.sub(r",\s*([}\]])", r"\1", content)
 
     return content
 
 
-def call_deepseek_json(prompt: str, temperature: float = 0.0) -> dict[str, Any]:
-    """调用 DeepSeek 并解析 JSON 输出。
+def call_llm_json(prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
+    """调用当前配置的 LLM 并解析 JSON 输出。
 
     Args:
         prompt: 完整提示词
@@ -64,18 +166,22 @@ def call_deepseek_json(prompt: str, temperature: float = 0.0) -> dict[str, Any]:
     Raises:
         RuntimeError: LLM 调用失败或返回内容无法解析为 JSON
     """
-    # 懒加载：仅实际调用 LLM 时才引入 langchain-openai
-    from langchain_openai import ChatOpenAI
+    cfg = get_llm_config()
+    try:
+        llm = build_chat_model(cfg, temperature=temperature)
+        response = llm.invoke(prompt)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"LLM 调用失败（{cfg['label']} / {cfg['model']}）: {exc}"
+        ) from exc
 
-    llm = ChatOpenAI(
-        model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        temperature=temperature,
+    content = (
+        response.content.strip()
+        if hasattr(response, "content")
+        else str(response).strip()
     )
-
-    response = llm.invoke(prompt)
-    content = response.content.strip() if hasattr(response, "content") else str(response).strip()
 
     # 清理可能的 markdown 代码块包裹
     if content.startswith("```"):
@@ -90,9 +196,13 @@ def call_deepseek_json(prompt: str, temperature: float = 0.0) -> dict[str, Any]:
         try:
             return json.loads(repaired)
         except json.JSONDecodeError as exc:
-            # 提取错误位置附近内容便于定位
             pos = exc.pos
             snippet = content[max(0, pos - 80):pos + 80].replace("\n", "\\n")
             raise RuntimeError(
                 f"LLM 返回内容无法解析为 JSON: {exc}\n错误位置附近: ...{snippet}..."
-            )
+            ) from exc
+
+
+def call_deepseek_json(prompt: str, temperature: float = 0.0) -> Dict[str, Any]:
+    """兼容别名：等价于 call_llm_json（旧代码/文档保留）。"""
+    return call_llm_json(prompt, temperature=temperature)
