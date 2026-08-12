@@ -122,3 +122,29 @@ class TestMatchSkillsInText:
         assert result["hit_count"] == 0
         assert result["total"] == 1
         assert result["by_dim"] == {}
+
+    def test_degree_requirement_semantic_hit(self):
+        skills = [{"name": "本科及以上学历", "category": "任职条件", "weight": 1.0, "rank": 1}]
+        result = match_skills_in_text("某某大学（本科）计算机专业", skills)
+        assert result["hit_count"] == 1
+
+    def test_degree_requirement_miss_when_underqualified(self):
+        skills = [{"name": "硕士及以上学历", "category": "任职条件", "weight": 1.0, "rank": 1}]
+        result = match_skills_in_text("某某大学（本科）计算机专业", skills)
+        assert result["hit_count"] == 0
+        assert result["miss"][0]["name"] == "硕士及以上学历"
+
+    def test_degree_requirement_overqualified_hit(self):
+        skills = [{"name": "本科及以上学历", "category": "任职条件", "weight": 1.0, "rank": 1}]
+        result = match_skills_in_text("某某大学（硕士）计算机专业", skills)
+        assert result["hit_count"] == 1
+
+    def test_degree_requirement_miss_without_degree(self):
+        skills = [{"name": "本科及以上学历", "category": "任职条件", "weight": 1.0, "rank": 1}]
+        result = match_skills_in_text("熟悉 Python 与 PyTorch", skills)
+        assert result["hit_count"] == 0
+
+    def test_non_degree_skill_keeps_substring_matching(self):
+        skills = self._skills("本科相关课程")
+        result = match_skills_in_text("修读过本科相关课程", skills)
+        assert result["hit_count"] == 1

@@ -31,6 +31,15 @@ _GENERIC_WINDOW_WORDS = (
 _DEGREE_LEVELS = {"博士": 3, "硕士": 2, "研究生": 2, "本科": 1, "学士": 1, "大专": 0, "专科": 0}
 
 
+def _is_degree_requirement(name: str) -> bool:
+    """是否为学历等级要求（如"本科及以上学历"），需按等级语义判定而非子串匹配。"""
+    if not name:
+        return False
+    has_degree_word = any(w in name for w in _DEGREE_LEVELS)
+    has_degree_scope = any(k in name for k in ("学历", "以上", "以下"))
+    return has_degree_word and has_degree_scope
+
+
 # ==================== 文本规范化 ====================
 
 def _normalize(text: str) -> str:
@@ -151,7 +160,12 @@ def match_skills_in_text(
         by_dim.setdefault(dim, {"hit": [], "miss": [], "hit_count": 0, "total": 0})
 
         norm_name = _normalize(name)
-        matched = norm_name in norm_text if len(norm_name) >= 2 else False
+        if _is_degree_requirement(name):
+            # 学历等级语义判定：简历最高学历满足要求即命中
+            # （如简历"本科" 命中"本科及以上学历"；"本科" 不命中"硕士及以上学历"）
+            matched = _degree_satisfied(raw_text, name)
+        else:
+            matched = norm_name in norm_text if len(norm_name) >= 2 else False
 
         # 找到原文中的位置（用于高亮）
         positions: List[Tuple[int, int]] = []

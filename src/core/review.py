@@ -86,6 +86,7 @@ def merge_enhance_review(
                 "hit_skills": hit_skills,
                 "total_skills": total_skills,
                 "review_note": item.get("review_note", ""),
+                "skill_weights": raw.get("skill_weights") or {},
                 "dimensions": merged_dims,
             }
         )

@@ -4,7 +4,13 @@ import os
 import pytest
 
 from src.store import MemoryRoleStore
-from src.tools.analyze import GAP_DIM_ORDER, analyze_gap, build_gap_report, prepare_gap
+from src.tools.analyze import (
+    GAP_DIM_ORDER,
+    analyze_gap,
+    build_gap_report,
+    prepare_gap,
+    weighted_missing_skills,
+)
 from src.tools.enhance import apply_enhance_review, enhance_matches, prepare_enhance
 from src.tools.modify import (
     find_ai_phrases,
@@ -152,6 +158,7 @@ class TestApplyEnhanceReview:
         # weighted = (0.9+0.7)/(0.9+0.7+0.4) = 0.8；penalty = 3/10 = 0.3 → 0.24
         assert item["score"] == pytest.approx(0.24)
         assert item["hit_skills"] == 2
+        assert item["skill_weights"] == raw["results"][0]["skill_weights"]
 
     def test_rank_resume_exposes_skill_weights(self, memory_store):
         rank_result = rank_resume("Python", topk=1, store=memory_store)
@@ -220,7 +227,11 @@ class TestBuildGapReport:
         assert set(report["dimensions"]) == set(GAP_DIM_ORDER)
         assert 0 <= report["dimensions"]["skill"]["score"] <= 1
         assert report["dimensions"]["skill"]["gap_level"] == "partial"
-        assert report["missing_skills"][0]["importance"] == "high"
+        # 缺失清单以岗位真实 miss + 图谱权重为准（LLM 编造的技能不在清单内）
+        assert report["missing_skills"]
+        assert report["missing_skills"][0]["importance"] in ("high", "medium", "low")
+        weights = [m["weight"] for m in report["missing_skills"]]
+        assert weights == sorted(weights, reverse=True)
         assert report["learning_path"][0]["prerequisite"] == "Python"
         assert report["learning_path"][0]["resources"] == ["官方文档"]
         assert report["learning_path"][0]["estimated_effort"] == "2 周"
@@ -232,16 +243,44 @@ class TestBuildGapReport:
         assert len(report["missing_skills"]) >= 1
         assert all(m["dim"] in GAP_DIM_ORDER for m in report["missing_skills"])
 
-    def test_sorts_by_importance(self, memory_store):
-        role = rank_resume("Python", topk=1, store=memory_store)["results"][0]
+    def test_sorts_missing_by_weight(self):
+        role = {
+            "role_name": "加权岗",
+            "dimensions": {
+                "skill": {"miss": ["低权重技能", "高权重技能"], "hit": [], "total": 2},
+                "knowledge": {"miss": [], "hit": [], "total": 0},
+                "qualifications": {"miss": [], "hit": [], "total": 0},
+                "preference": {"miss": [], "hit": [], "total": 0},
+                "motivation": {"miss": [], "hit": [], "total": 0},
+                "trait": {"miss": [], "hit": [], "total": 0},
+                "self_concept": {"miss": [], "hit": [], "total": 0},
+            },
+            "skill_weights": {"低权重技能": 0.1, "高权重技能": 0.9},
+        }
         llm = {
             "missing_skills": [
-                {"skill": "A", "dim": "skill", "importance": "low"},
-                {"skill": "B", "dim": "skill", "importance": "high"},
+                {"skill": "低权重技能", "dim": "skill", "importance": "high"},
+                {"skill": "高权重技能", "dim": "skill", "importance": "low"},
             ]
         }
         report = build_gap_report(role, llm)
-        assert [m["skill"] for m in report["missing_skills"]] == ["B", "A"]
+        # 排序以图谱权重为准，与 LLM importance 无关
+        assert [m["skill"] for m in report["missing_skills"]] == [
+            "高权重技能",
+            "低权重技能",
+        ]
+        # importance 仍合并 LLM 标注，weight 随条目输出
+        assert report["missing_skills"][0]["importance"] == "low"
+        assert report["missing_skills"][0]["weight"] == 0.9
+
+    def test_weighted_missing_prompt_and_order(self, memory_store):
+        role = rank_resume("Python", topk=1, store=memory_store)["results"][0]
+        payload = prepare_gap(role, "Python")
+        assert "pre-sorted by support weight" in payload["prompt"]
+        assert "(w=" in payload["prompt"]
+        items = weighted_missing_skills(role)
+        weights = [i["weight"] for i in items]
+        assert weights == sorted(weights, reverse=True)
 
     def test_dim_without_skills_is_sufficient(self):
         role = {

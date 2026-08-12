@@ -9,7 +9,7 @@
 | `role_name` | str | 目标岗位名 |
 | `match` | object | 匹配结论：`{verdict: "yes"\|"no", reason}` |
 | `dimensions` | object | 7 维得分结构（见下） |
-| `missing_skills` | array | 缺失技能清单，**按 importance 排序**（high → medium → low） |
+| `missing_skills` | array | 缺失技能清单，**按图谱权重降序**（final_score 支持度，高在前） |
 | `learning_path` | array | 学习路径（B3 契约，见 [learning-path-schema.md](learning-path-schema.md)） |
 | `overall_advice` | str | 整体建议 |
 
@@ -33,10 +33,12 @@
 ## missing_skills 单条
 
 ```json
-{"skill": "Kafka", "dim": "skill", "importance": "high"}
+{"skill": "Kafka", "dim": "skill", "importance": "high", "weight": 0.62}
 ```
 
-`importance` 枚举：`high / medium / low`；同一 importance 内按图谱 rank 序。
+`importance` 枚举：`high / medium / low`（LLM 复核标注，按技能名合并，查不到回退 medium）；
+`weight` 为该技能在岗位图谱中的 `final_score`（JD 支持度，0~1），排序与展示均以此为准。
+学习路径步骤顺序由 LLM 综合重要性与前置依赖给出（输入为该权重降序清单）。
 
 ## JSON Schema（摘要）
 
@@ -79,4 +81,3 @@
 完整结构化输出见 [sample-gap-response.json](sample-gap-response.json)
 （基于真实简历 faircv_000_后端开发工程师 + Neo4j 图谱 Java 开发工程师的 rank 结果；
 LLM 部分为 mock 占位内容，接入真实模型后 summary/建议为语义文本，结构不变）。
-

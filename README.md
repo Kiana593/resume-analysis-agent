@@ -91,6 +91,47 @@ python src/main.py extract-resume -i samples/faircv_sample_100.json -o faircv_pr
 python src/main.py --store neo4j rank -r 简历.pdf
 ```
 
+## HTTP API（FastAPI，前端联调）
+
+服务入口 `api_server.py`，Swagger 自动文档：`http://127.0.0.1:8000/docs`。
+
+```powershell
+# 启动（推荐用项目环境 pyw1，已装 fastapi/uvicorn）
+C:\Users\Kianak901\anaconda3\envs\pyw1\python.exe api_server.py
+# 或
+uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+路由一览（`/extract /enhance /gap /modify` 需要 `.env` 中当前 `LLM_PROVIDER` 的凭证）：
+
+| 方法 | 路径 | 调 LLM | 说明 |
+|---|---|---|---|
+| GET | `/health` | 否 | 健康检查 / 数据源 / 岗位数 / LLM 配置 |
+| POST | `/upload` | 否 | 简历文件（PDF/DOCX/MD/TXT）→ Markdown 文本 |
+| POST | `/extract` | 是 | 简历 → 7 维画像（防幻觉校验） |
+| POST | `/rank` | 否 | 关键词命中粗排 Top-N + 七维覆盖率 |
+| POST | `/enhance` | 是 | 语义复核粗排结果 |
+| POST | `/gap` | 是 | 差距分析（`analysis` + `markdown` + 结构化 `report`） |
+| POST | `/modify` | 是 | 简历修改建议 + 防造假校验 |
+| POST | `/radar` | 否 | 七维雷达图 PNG（可直接 `img src`） |
+
+最小调用示例：
+
+```bash
+# 1. 健康检查
+curl http://127.0.0.1:8000/health
+
+# 2. 上传简历，拿到返回的 text 字段（后续接口复用）
+curl -F "file=@简历.pdf" http://127.0.0.1:8000/upload
+
+# 3. 粗排（resume_text 用上一步返回的 text）
+curl -X POST http://127.0.0.1:8000/rank \
+  -H "Content-Type: application/json" \
+  -d '{"resume_text": "简历Markdown原文", "topk": 10}'
+```
+
+完整请求/响应示例见 [docs/api.md](docs/api.md)。
+
 ## LLM 供应商切换
 
 CLI 通过 `src/utils/llm.py` 的统一适配器调用模型（OpenAI 兼容协议），支持多供应商。
@@ -162,6 +203,8 @@ Role 得分 = (Σ 命中技能 final_score / Σ 核心技能 final_score) × min
 - IDF 跨岗位重加权默认关闭，可经 `use_idf` 开关消融对比。
 - 语义复核（`enhance` / `apply_enhance_review`）合并后按同一加权口径重算分数，
   rank 结果中的 `skill_weights` 供复核合并查权重，粗排与复核分数口径一致。
+- 任职条件的学历要求按**等级语义判定**（如"本科"命中"本科及以上学历"、
+  "本科"不命中"硕士及以上学历"），而非纯子串匹配。
 - 匹配方式：技能名与简历原文统一去空白/标点、全角转半角、转小写后做归一化子串包含判断。
 
 ## 测试

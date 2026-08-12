@@ -15,13 +15,20 @@ ROLE_GAP_PROMPT = """You are a career advisor. Below is the skill match between 
 ## Pre-computed Match Details
 {dimension_details}
 
+## Missing Skills (pre-sorted by support weight, high first)
+{missing_sorted}
+
 ## Resume (context only)
 {resume_raw_text}
 
 ## Task
 1. Judge match level for each dimension (missing / partial / sufficient).
-2. List the missing skills, sorted by importance (high first).
-3. Generate a learning path (max 8 steps) for missed skills only.
+2. Output the missing skills in the SAME order as the pre-sorted list above,
+   filling importance (high/medium/low) based on weight and your judgment.
+3. Generate a learning path (max 8 steps) for the missing skills. Order the steps
+   by combining importance (higher first) with prerequisite/knowledge dependency
+   (must-learn-first); the final order may differ from the input list when
+   prerequisites require it.
    Each step must include: skill, importance, prerequisite, resources,
    estimated_effort, why.
 4. Output overall advice.

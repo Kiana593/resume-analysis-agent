@@ -1,7 +1,7 @@
 """analyze_gap 工具 — 基于结构化命中清单的 LLM 差距分析 + 学习路径。"""
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..core.dimensions import DIM_LABELS
 from ..prompts.gap_analysis import ROLE_GAP_PROMPT
@@ -35,6 +35,40 @@ def _build_dimension_details(role: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def weighted_missing_skills(role: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """从 role 维度 miss 明细提取缺失技能，附图谱权重并按权重降序（纯逻辑）。
+
+    权重取 role.skill_weights（HAS_CORE_SKILL.final_score），查不到按 0.0。
+    返回: [{"skill", "dim", "weight"}, ...]（weight 降序）
+    """
+    dims = role.get("dimensions") or {}
+    weights = role.get("skill_weights") or {}
+    items: List[Dict[str, Any]] = []
+    for dim in GAP_DIM_ORDER:
+        detail = dims.get(dim) or {}
+        for name in detail.get("miss", []) or []:
+            name = str(name)
+            items.append(
+                {
+                    "skill": name,
+                    "dim": dim,
+                    "weight": round(float(weights.get(name, 0.0) or 0.0), 4),
+                }
+            )
+    items.sort(key=lambda x: x["weight"], reverse=True)
+    return items
+
+
+def _build_missing_block(role: Dict[str, Any]) -> str:
+    """把权重降序的缺失技能列表格式化为 prompt 输入块。"""
+    items = weighted_missing_skills(role)
+    if not items:
+        return "（无缺失技能）"
+    return "\n".join(
+        f"- {m['skill']} [{m['dim']}] (w={m['weight']:.4f})" for m in items
+    )
+
+
 def build_gap_report(
     role: Dict[str, Any],
     llm_analysis: Dict[str, Any],
@@ -42,7 +76,7 @@ def build_gap_report(
     """把 role 命中明细 + LLM 差距分析合并为结构化 gap 报告（B2 契约）。
 
     报告包含：匹配结论、7 维得分（0-1 覆盖率 + 命中/缺失）、缺失技能清单
-    （按重要性排序）、学习路径（B3 字段）、整体建议。
+    （按图谱权重降序）、学习路径（B3 字段，LLM 综合排序）、整体建议。
     """
     dims = role.get("dimensions") or {}
     llm_dims = llm_analysis.get("dimensions") or {}
@@ -70,27 +104,41 @@ def build_gap_report(
             "missing": detail.get("miss", []),
         }
 
-    # 缺失技能清单：LLM 判定优先，回退到 role 的 miss 明细
+    # 缺失技能清单：以 role 维度 miss 为准，按图谱权重降序；
+    # LLM 的 importance 仅作为标注（按技能名合并），查不到回退 medium。
     raw_missing = llm_analysis.get("missing_skills")
-    if isinstance(raw_missing, list) and raw_missing:
+    llm_importance: Dict[str, str] = {}
+    if isinstance(raw_missing, list):
+        for m in raw_missing:
+            if m.get("skill"):
+                llm_importance[str(m["skill"])] = str(m.get("importance", "medium"))
+
+    weighted = weighted_missing_skills(role)
+    if weighted:
+        missing_skills = [
+            {
+                "skill": m["skill"],
+                "dim": m["dim"],
+                "importance": llm_importance.get(m["skill"], "medium"),
+                "weight": m["weight"],
+            }
+            for m in weighted
+        ]
+    else:
+        # 极端情况：role 没有维度 miss 明细，回退 LLM 列表（按 importance 排序）
         missing_skills = [
             {
                 "skill": str(m.get("skill", "")),
                 "dim": str(m.get("dim", "")),
                 "importance": str(m.get("importance", "medium")),
+                "weight": 0.0,
             }
-            for m in raw_missing
+            for m in (raw_missing or [])
             if m.get("skill")
         ]
-    else:
-        missing_skills = [
-            {"skill": name, "dim": dim, "importance": "medium"}
-            for dim, detail in report_dims.items()
-            for name in detail["missing"]
-        ]
-    missing_skills.sort(
-        key=lambda x: _IMPORTANCE_RANK.get(x.get("importance", "medium"), 1)
-    )
+        missing_skills.sort(
+            key=lambda x: _IMPORTANCE_RANK.get(x.get("importance", "medium"), 1)
+        )
 
     # 学习路径：按 B3 契约规范化（LLM 缺字段时给空值/空数组，前端可直接渲染）
     learning_path: List[Dict[str, Any]] = []
@@ -168,6 +216,7 @@ def prepare_gap(role: Dict[str, Any], resume_text: str) -> Dict[str, Any]:
         family_name=role.get("family_name", ""),
         domain_name=role.get("domain_name", ""),
         dimension_details=_build_dimension_details(role),
+        missing_sorted=_build_missing_block(role),
         resume_raw_text=text[:12000],
     )
     return {
@@ -215,6 +264,7 @@ def analyze_gap(
         family_name=role.get("family_name", ""),
         domain_name=role.get("domain_name", ""),
         dimension_details=_build_dimension_details(role),
+        missing_sorted=_build_missing_block(role),
         resume_raw_text=text[:12000],
     )
     caller = llm_func or call_llm_json

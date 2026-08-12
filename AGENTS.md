@@ -32,7 +32,8 @@
    合并规范化，得到带 review_note 的结果。
 5. **雷达图**：取复核后或粗排的 role JSON，调 `visualize_radar(role_json, role_name)`，返回 PNG 直接渲染。
 6. **差距分析**：调 `prepare_gap(role_json, resume_text)` 拿提示包，用自己的模型输出
-   Markdown 报告（匹配结论 / 各维分析 / 总体建议 / 学习路径）。
+   Markdown 报告（匹配结论 / 各维分析 / 总体建议 / 学习路径；
+   缺失技能清单按图谱权重降序预排序后交给模型，学习路径顺序由模型综合重要性与前置依赖给出）。
 7. **简历修改**：调 `prepare_resume_edit(role_json, resume_text)` 拿提示包，用自己的模型输出
    针对性修改建议（遵守真实性红线，不重写全文）；建议产出后再调
    `validate_resume_edit(role_json, resume_text, edit_json)` 做防造假校验
