@@ -25,6 +25,9 @@ async def _run_handshake() -> dict:
         command=sys.executable,
         args=[str(SERVER)],
         cwd=str(ROOT),
+        # 显式指定 memory 后端：mcp SDK 只继承白名单环境变量，
+        # 本机 .env 若为 neo4j 会导致无 Neo4j 环境下手柄测试失败。
+        env={"STORE_BACKEND": "memory"},
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

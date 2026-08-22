@@ -14,7 +14,11 @@ For each role in the list:
 2. A skill is a REAL hit only if the resume genuinely demonstrates it (synonyms, project context, or explicit mention count). Remove hits that are pure keyword coincidences.
 3. A skill is a MISSED hit only if the resume clearly demonstrates it but the keyword matcher missed it. Only add skills that appear in the keyword results' "miss" list.
 4. Do NOT invent skills not present in the original match data.
-5. Recompute "score" proportionally to the corrected hit_count/total_skills ratio (keep 4 decimals).
+5. The final "score" is recomputed server-side with the weighted-coverage formula:
+   score = (sum of final_score of hit skills / sum of final_score of all skills)
+           x min(1, total_skills / 10).
+   Focus on fixing the hit/miss lists; the "score" you report is best-effort
+   and will be overwritten by the server.
 6. Add "review_note" to each role summarizing corrections made (or "无修正").
 
 ## Output (JSON only, no other text)

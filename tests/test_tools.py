@@ -76,6 +76,34 @@ class TestEnhanceMatches:
         out = enhance_matches(rank_result, "Python", topk=3, llm_func=fake)
         assert out["topk"] == len(rank_result["results"])
 
+    def test_cli_recomputes_score_server_side(self, memory_store):
+        """CLI 与 MCP 同口径：忽略模型自报 score，按加权覆盖率 × 惩罚重算。"""
+        rank_result = rank_resume("Python", topk=1, store=memory_store)
+        raw = rank_result["results"][0]
+        review = {
+            "topk": 1,
+            "results": [
+                {
+                    "role_name": raw["role_name"],
+                    "score": 0.9999,  # 模型自报的假分数，必须被覆盖
+                    "hit_skills": raw["total_skills"],
+                    "total_skills": raw["total_skills"],
+                    "review_note": "全部命中",
+                    "dimensions": {
+                        dim: {"hit": detail["hit"] + detail["miss"], "miss": []}
+                        for dim, detail in raw["dimensions"].items()
+                    },
+                }
+            ],
+        }
+        out = enhance_matches(rank_result, "Python", topk=1, llm_func=_fake_llm(review))
+        item = out["results"][0]
+        assert item["score"] != 0.9999
+        expected = apply_enhance_review(rank_result, review)["results"][0]["score"]
+        assert item["score"] == expected
+        assert item["hit_skills"] == item["total_skills"]
+        assert item["review_note"] == "全部命中"
+
     def test_empty_rank_result_raises(self, memory_store):
         with pytest.raises(ValueError):
             enhance_matches({}, "Python", llm_func=_fake_llm({}))

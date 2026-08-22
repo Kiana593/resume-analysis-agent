@@ -110,9 +110,10 @@ def enhance_matches(
         llm_func: 可注入的 LLM 调用函数（测试用），缺省用 call_llm_json。
 
     Returns:
-        LLM 修正后的 JSON：
+        与 MCP 模式同口径的合并 JSON（review.py 确定性重算）：
         {"topk": N, "results": [{"role_name", "score", "hit_skills",
-                                 "total_skills", "review_note", "dimensions"}, ...]}
+                                 "total_skills", "review_note",
+                                 "skill_weights", "dimensions"}, ...]}
     """
     text = (resume_text or "").strip()
     if not text:
@@ -130,4 +131,6 @@ def enhance_matches(
     result = caller(prompt)
     if not isinstance(result, dict):
         raise RuntimeError("LLM 复核返回格式异常：期望 JSON 对象。")
-    return result
+    # 与 MCP 模式对齐：不信任模型自报数字，
+    # 合并复核 hit/miss 后按「加权覆盖率 × 少条目惩罚」确定性重算 score。
+    return apply_enhance_review(rank_result, result)
